@@ -45,9 +45,8 @@ Untick *Send automatically* to send only by hand.
 
 Pairing leaves a device token in `config/plugin.fpp-plugin-IlluminationToolbox`.
 It can upload this one player's snapshot to the toolbox and nothing else —
-it cannot read the account, its conversations, or another player. Changing the
-account password ends it, as it ends every session; pair again afterwards.
-Uninstalling the plugin deletes the file.
+it cannot read the account, its conversations, or another player. It lasts a
+year; pair again when it lapses. Uninstalling the plugin deletes the file.
 
 ## How it works
 
