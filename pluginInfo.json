@@ -1,0 +1,18 @@
+{
+	"repoName": "fpp-plugin-IlluminationToolbox",
+	"name": "Illumination Toolbox",
+	"author": "James Arrowood (Native Sky Apps)",
+	"description": "Links this player to your Illumination Toolbox account and sends its configuration - channel outputs, pixel strings, schedule, playlists, settings and current warnings - so the xLights AI and the other toolbox tools can see it when you ask for help. Passwords, keys and tokens are redacted on the player before anything leaves it.",
+	"homeURL": "https://github.com/Native-Sky-Apps/fpp-plugin-IlluminationToolbox",
+	"srcURL": "https://github.com/Native-Sky-Apps/fpp-plugin-IlluminationToolbox.git",
+	"bugURL": "https://github.com/Native-Sky-Apps/fpp-plugin-IlluminationToolbox/issues",
+	"allowUpdates": 1,
+	"versions": [
+		{
+			"minFPPVersion": "7.0",
+			"maxFPPVersion": "0",
+			"branch": "main",
+			"sha": ""
+		}
+	]
+}
