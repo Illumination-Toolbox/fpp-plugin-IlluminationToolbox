@@ -43,7 +43,7 @@
 
 	<h3>Links</h3>
 	<ul>
-		<li><a href="https://github.com/Native-Sky-Apps/fpp-plugin-IlluminationToolbox" target="_blank" rel="noopener">Source</a></li>
-		<li><a href="https://github.com/Native-Sky-Apps/fpp-plugin-IlluminationToolbox/issues" target="_blank" rel="noopener">Report a problem</a></li>
+		<li><a href="https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox" target="_blank" rel="noopener">Source</a></li>
+		<li><a href="https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/issues" target="_blank" rel="noopener">Report a problem</a></li>
 	</ul>
 </div>

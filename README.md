@@ -20,7 +20,7 @@ FPP → Content Setup → Plugin Manager → install from the plugin list, or pa
 the repository URL under *Install from URL*:
 
 ```
-https://github.com/Native-Sky-Apps/fpp-plugin-IlluminationToolbox.git
+https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox.git
 ```
 
 ## Pair
