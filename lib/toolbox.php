@@ -26,7 +26,7 @@ if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
 	define('ITB_PLUGIN_VERSION', '1.0.0');
 	define('ITB_SCHEMA', 'illumination-toolbox.fpp-snapshot/1');
-	define('ITB_DEFAULT_API', 'https://illumination-toolbox-api-fqdjgpc0fdf9dbcp.centralus-01.azurewebsites.net');
+	define('ITB_DEFAULT_API', 'https://api.illuminationtoolbox.com');
 	define('ITB_LOCAL_API', 'http://127.0.0.1');
 	/** One config file bigger than this is skipped; the toolbox caps the whole snapshot at 4 MB. */
 	define('ITB_MAX_CONFIG_FILE_BYTES', 512000);
@@ -428,7 +428,7 @@ function itb_sync($auto = false)
 	}
 
 	if ($status === 401)
-		$message = 'The toolbox no longer accepts this player\'s token — the account password may have changed. Pair again.';
+		$message = 'The toolbox no longer accepts this player\'s token. Pair again.';
 	else
 		$message = itb_toolbox_error($status, $out, $err, 'The toolbox refused the snapshot');
 

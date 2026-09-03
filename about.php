@@ -37,8 +37,8 @@
 		<li>On this player, open <b>Status / Control → Illumination Toolbox</b>, type the code, and press <b>Link this player</b>.</li>
 	</ol>
 	<p>
-		The player keeps a token that can upload its own snapshot and nothing else. Changing the account's
-		password ends it, as it ends every session; pair again afterwards.
+		The player keeps a token that can upload its own snapshot and nothing else. It lasts a year; pair
+		again when it lapses, or any time you want a fresh one.
 	</p>
 
 	<h3>Links</h3>
