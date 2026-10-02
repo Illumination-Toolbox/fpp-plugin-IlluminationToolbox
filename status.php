@@ -17,8 +17,9 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 <div class="col-lg-10 col-xl-8">
 	<p class="text-body-secondary mb-4">
 		Send this player's configuration to your Illumination Toolbox account, so the xLights AI can see your
-		outputs, pixel strings, schedule and warnings when you ask it for help. Every toolbox tool reads the same copy.
-		Passwords, keys and tokens are removed on this player before anything is sent.
+		outputs, pixel strings, schedule, warnings and whether your controllers answer when you ask it for help.
+		Every toolbox tool reads the same copy. Passwords, keys and tokens, FPP's privacy settings, and hardware
+		serial numbers and MAC addresses are removed on this player before anything is sent.
 	</p>
 
 	<section class="card mb-3" id="itb-link">
@@ -42,6 +43,7 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 					<span class="d-block small text-body-secondary">Every five minutes when something changed, at least hourly, and when fppd starts.</span>
 				</label>
 			</div>
+			<p id="itb-auto-msg" class="text-danger text-break small mb-2" role="alert"></p>
 			<div class="d-flex flex-wrap align-items-center gap-3">
 				<button type="button" class="btn btn-primary" id="itb-sync-now">Send now</button>
 				<a class="small" href="<?php echo htmlspecialchars($itbApi); ?>/preview" target="_blank" rel="noopener">See exactly what is sent</a>
@@ -58,11 +60,14 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 			</dl>
 			<div class="form-check form-switch mb-2">
 				<input class="form-check-input" type="checkbox" role="switch" id="itb-allow-remote">
-				<label class="form-check-label" for="itb-allow-remote">Let the toolbox ask this player for a fresh snapshot, a light test, or an fppd restart</label>
+				<label class="form-check-label" for="itb-allow-remote">Let the toolbox ask this player for a fresh snapshot, a light test, or to flag fppd for a restart</label>
 			</div>
+			<p id="itb-remote-msg" class="text-danger text-break small mb-2" role="alert"></p>
 			<p class="small text-body-secondary mb-0">
 				The player asks the toolbox whether anything is waiting; the toolbox never connects to the player.
-				A request that is not picked up within ten minutes lapses.
+				A request that is not picked up within ten minutes lapses. A restart request does not stop a running show by itself:
+				it raises FPP's own "FPPD Restart Required" banner, and fppd restarts when you press
+				<strong>Restart FPPD</strong> there, or when the player next boots.
 			</p>
 		</div>
 	</section>
@@ -97,12 +102,21 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 		var last = node.classList.contains('mb-0') ? ' mb-0' : '';
 		node.className = 'col-sm-8 col-md-9' + last + (classes ? ' ' + classes : '');
 	}
+	// Every POST carries a JSON body, even an empty one: the plugin's API
+	// refuses a POST without Content-Type: application/json (see api.php).
 	function call(method, path, body) {
+		var post = method !== 'GET';
 		return fetch(API + path, {
 			method: method,
-			headers: body ? { 'Content-Type': 'application/json' } : {},
-			body: body ? JSON.stringify(body) : undefined
+			headers: post ? { 'Content-Type': 'application/json' } : {},
+			body: post ? JSON.stringify(body || {}) : undefined
 		}).then(function (r) { return r.json(); });
+	}
+
+	// FPP's own toast when the page has it, and the line under the switch either way.
+	function fail(lineId, text) {
+		el(lineId).textContent = text;
+		if (window.jQuery && jQuery.jGrowl) jQuery.jGrowl(text, { themeState: 'danger' });
 	}
 
 	function render() {
@@ -140,8 +154,9 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 				'</dl>' +
 				'<div class="d-flex flex-wrap align-items-center gap-3">' +
 				'<button type="button" class="btn btn-outline-danger" id="itb-unlink">Unlink</button>' +
-				'<span class="small text-body-secondary">Stops sending. To delete what the toolbox already holds, remove this player under FPP players in the toolbox.</span></div>';
-			el('itb-unlink').addEventListener('click', unlink);
+				'<span class="small text-body-secondary">Stops sending. To delete what the toolbox already holds, remove this player under FPP players in the toolbox.</span></div>' +
+				'<p id="itb-unlink-msg" class="text-danger text-break small mt-2 mb-0" role="alert"></p>';
+			el('itb-unlink').addEventListener('click', unlinkPlayer);
 
 			el('itb-sync').classList.remove('d-none');
 			var why = s.lastTrigger && TRIGGERS[s.lastTrigger] ? ' <span class="text-body-secondary">(' + esc(TRIGGERS[s.lastTrigger]) + ')</span>' : '';
@@ -185,9 +200,10 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 		}).catch(function () { msg.textContent = 'Pairing failed.'; btn.disabled = false; });
 	}
 
-	function unlink() {
+	function unlinkPlayer() {
 		if (!confirm('Stop sending this player\'s configuration to the toolbox?')) return;
-		call('POST', '/unlink').then(function () { return load(false); });
+		call('POST', '/unlink').then(function () { return load(false); })
+			.catch(function () { fail('itb-unlink-msg', 'Could not unlink: this player\'s plugin API did not answer.'); });
 	}
 
 	el('itb-sync-now').addEventListener('click', function () {
@@ -199,13 +215,26 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 		}).catch(function () { btn.disabled = false; btn.textContent = 'Send now'; });
 	});
 
-	el('itb-auto').addEventListener('change', function () {
-		call('POST', '/settings', { autoSync: el('itb-auto').checked }).then(function (s) { state = Object.assign({}, state, s); render(); });
-	});
-
-	el('itb-allow-remote').addEventListener('change', function () {
-		call('POST', '/settings', { allowRemote: el('itb-allow-remote').checked }).then(function (s) { state = Object.assign({}, state, s); render(); });
-	});
+	// A switch that could not be saved goes back to where it was, and says so,
+	// rather than showing a setting the player does not have.
+	function toggle(boxId, lineId, key) {
+		var box = el(boxId);
+		box.addEventListener('change', function () {
+			var wanted = box.checked;
+			var body = {};
+			body[key] = wanted;
+			el(lineId).textContent = '';
+			call('POST', '/settings', body).then(function (s) {
+				if (!s || !s.ok) throw new Error(s && s.error ? s.error : 'not saved');
+				state = Object.assign({}, state, s); render();
+			}).catch(function (e) {
+				box.checked = !wanted;
+				fail(lineId, 'Could not save that setting' + (e && e.message && e.message !== 'not saved' ? ': ' + e.message : '.'));
+			});
+		});
+	}
+	toggle('itb-auto', 'itb-auto-msg', 'autoSync');
+	toggle('itb-allow-remote', 'itb-remote-msg', 'allowRemote');
 
 	load(true);
 })();

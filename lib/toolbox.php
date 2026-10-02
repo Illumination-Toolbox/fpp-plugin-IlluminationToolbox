@@ -6,10 +6,11 @@
  * and poll loop that run behind them. Four jobs:
  *
  *   1. Pair. Trade a code the person read off the toolbox for a device token,
- *      and keep it in this plugin's settings file.
+ *      and keep it in this plugin's own data folder, readable by nobody else.
  *   2. Snapshot. Ask this player, through its own local REST API, for
  *      everything that describes how it is set up, and redact anything that
- *      looks like a secret before it goes anywhere.
+ *      looks like a secret, and anything that identifies the hardware itself,
+ *      before it goes anywhere.
  *   3. Send. PUT the snapshot to the toolbox, which holds it for every tool on
  *      the account — and remember what went, so the five-minute timer can
  *      tell whether anything changed and stay quiet when nothing did.
@@ -17,11 +18,12 @@
  *      something — a fresh snapshot, a light test, an fppd restart — do it,
  *      and report back.
  *
- * Nothing here reads fppd's internal port or touches files under the media
- * directory directly (the one exception is this plugin's own state file);
- * everything else goes through http://127.0.0.1/api, which is what the
- * plugin guidelines ask for and what keeps this working across FPP versions
- * and platforms.
+ * Nothing here reads fppd's internal port or touches FPP's files under the
+ * media directory; the only files it writes are its own, in
+ * plugindata/fpp-plugin-IlluminationToolbox/, and its one log. Everything
+ * else goes through http://127.0.0.1/api, which is what the plugin
+ * guidelines ask for and what keeps this working across FPP versions and
+ * platforms.
  *
  * Requires FPP's common.php to be loaded first, for ReadSettingFromFile,
  * WriteSettingToFile and $settings. plugin.php and api/index.php both do that.
@@ -29,25 +31,30 @@
 
 if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
-	define('ITB_PLUGIN_VERSION', '1.1.0');
+	define('ITB_PLUGIN_VERSION', '1.2.0');
 	define('ITB_SCHEMA', 'illumination-toolbox.fpp-snapshot/1');
 	define('ITB_DEFAULT_API', 'https://api.illuminationtoolbox.com');
 	define('ITB_LOCAL_API', 'http://127.0.0.1');
 	/** One config file bigger than this is skipped; the toolbox caps the whole snapshot at 4 MB. */
 	define('ITB_MAX_CONFIG_FILE_BYTES', 512000);
 	define('ITB_SNAPSHOT_BUDGET_BYTES', 2500000);
-	/** What was last sent, so the timer can tell a change from a repeat. Lives next to the settings file. */
-	define('ITB_STATE_FILE', 'plugin.' . ITB_PLUGIN . '.state.json');
+	/** Where 1.1 kept what was last sent, beside the settings file. Deleted on sight now. */
+	define('ITB_OLD_STATE_FILE', 'plugin.' . ITB_PLUGIN . '.state.json');
 	/** The timer resends an unchanged snapshot once this much time has passed, so a quiet player is still heard from hourly. */
 	define('ITB_RESEND_AFTER_SECONDS', 55 * 60);
 	define('ITB_MAX_FILES', 300);
 	define('ITB_MAX_SEQUENCE_META', 40);
+	/** Controllers: at most this many discovered systems, and this many output addresses pinged. */
+	define('ITB_MAX_CONTROLLERS', 64);
+	/** A skip, or a poll that could not reach the toolbox, is logged at most this often per reason. */
+	define('ITB_LOG_QUIET_SECONDS', 3600);
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────
 // FPP keeps these in config/plugin.fpp-plugin-IlluminationToolbox as
-// key = "value" lines. The device token lives here too, which is why the
-// uninstall script deletes the file.
+// key = "value" lines: the switches, who the player is linked to, and what
+// happened last. Not the device token — config/ is copied into FPP's backups
+// and crash reports, so the token lives in plugindata/ instead (below).
 
 function itb_setting($name, $default = '')
 {
@@ -75,11 +82,14 @@ function itb_now()
 	return gmdate('Y-m-d\TH:i:s\Z');
 }
 
-// ── State file ──────────────────────────────────────────────────────────────
-// The settings file is for values a person can see and change. What the
-// plugin remembers about its last send — the fingerprint and one hash per
-// section — is bookkeeping, and goes in a JSON file beside it instead, in
-// the same config directory FPP resolves for the settings file.
+// ── The plugin's own data ───────────────────────────────────────────────────
+// Everything the plugin keeps that is not a setting a person would change
+// lives in <mediadir>/plugindata/fpp-plugin-IlluminationToolbox/: the device
+// token, and the bookkeeping about the last send. FPP's backups and crash
+// reports copy config/ and never plugindata/, which is why the token is
+// here (guidelines §14.11). The folder is 0700 and each file 0600, owned by
+// whoever wrote it — the web server's user, since everything here runs
+// behind Apache. Unlink deletes the token; uninstall deletes the folder.
 
 /**
  * FPP's media directory, the way common.php works it out; the usual default
@@ -93,38 +103,158 @@ function itb_media_dir()
 	return '/home/fpp/media';
 }
 
-function itb_state_path()
+function itb_data_dir()
 {
-	return itb_media_dir() . '/config/' . ITB_STATE_FILE;
+	return itb_media_dir() . '/plugindata/' . ITB_PLUGIN;
+}
+
+/** The data folder, made on first use with nobody else able to look in. False if it cannot be made. */
+function itb_ensure_data_dir()
+{
+	$dir = itb_data_dir();
+	if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir))
+		return false;
+	@chmod($dir, 0700);
+	return $dir;
+}
+
+/**
+ * One of the plugin's files, written whole through a temporary file, mode
+ * 0600 from the moment it exists — so a poll and a timer run landing at the
+ * same moment cannot leave half a file for the next one to read, and the
+ * token is never readable by anyone else even for an instant.
+ */
+function itb_write_private($name, $content)
+{
+	$dir = itb_ensure_data_dir();
+	if ($dir === false)
+		return false;
+	$path = $dir . '/' . $name;
+	$tmp = $path . '.tmp';
+	$old = umask(0077);
+	$written = @file_put_contents($tmp, $content);
+	umask($old);
+	if ($written === false)
+		return false;
+	@chmod($tmp, 0600);
+	return @rename($tmp, $path);
+}
+
+function itb_read_private($name)
+{
+	$path = itb_data_dir() . '/' . $name;
+	return is_file($path) ? @file_get_contents($path) : false;
+}
+
+function itb_delete_private($name)
+{
+	@unlink(itb_data_dir() . '/' . $name);
+}
+
+// ── Device token ────────────────────────────────────────────────────────────
+// The one credential the plugin holds. 1.1 kept it in the settings file as
+// deviceToken; the first read after an upgrade moves it here and blanks the
+// old setting, and leaves it where it was if the move fails.
+
+function itb_token()
+{
+	$stored = itb_read_private('token');
+	if ($stored !== false && trim($stored) !== '')
+		return trim($stored);
+
+	$old = itb_setting('deviceToken');
+	if ($old === '')
+		return '';
+	if (itb_write_private('token', $old))
+		itb_set('deviceToken', '');
+	return $old;
+}
+
+function itb_set_token($token)
+{
+	return itb_write_private('token', (string) $token);
+}
+
+function itb_forget_token()
+{
+	itb_delete_private('token');
+	if (itb_setting('deviceToken') !== '')
+		itb_set('deviceToken', '');
+}
+
+// ── State file ──────────────────────────────────────────────────────────────
+// What the plugin remembers about its last send — the fingerprint and one
+// hash per section — is bookkeeping, not a setting, and goes in state.json
+// in the data folder. 1.1 kept it beside the settings file; that copy is
+// deleted rather than carried over, and the next timer run simply sends.
+
+function itb_drop_old_state()
+{
+	$old = itb_media_dir() . '/config/' . ITB_OLD_STATE_FILE;
+	if (is_file($old))
+		@unlink($old);
+	if (is_file($old . '.tmp'))
+		@unlink($old . '.tmp');
 }
 
 /** What the last successful send left behind, or an empty array if nothing did. */
 function itb_read_state()
 {
-	$path = itb_state_path();
-	if (!is_file($path))
+	itb_drop_old_state();
+	$json = itb_read_private('state.json');
+	if ($json === false)
 		return array();
-	$decoded = json_decode((string) @file_get_contents($path), true);
+	$decoded = json_decode((string) $json, true);
 	return is_array($decoded) ? $decoded : array();
 }
 
-/**
- * Written whole, through a temporary file, so a poll and a timer run landing
- * at the same moment cannot leave half a file for the next one to read.
- */
 function itb_write_state($state)
 {
-	$path = itb_state_path();
-	$tmp = $path . '.tmp';
 	$json = itb_encode($state);
-	if ($json === false || @file_put_contents($tmp, $json) === false)
-		return false;
-	return @rename($tmp, $path);
+	return $json !== false && itb_write_private('state.json', $json);
 }
 
 function itb_clear_state()
 {
-	@unlink(itb_state_path());
+	itb_delete_private('state.json');
+	itb_drop_old_state();
+}
+
+// ── Log ─────────────────────────────────────────────────────────────────────
+// One file, plugin-fpp-plugin-IlluminationToolbox.log in FPP's log folder,
+// so it shows in FPP's log viewer and support zip; FPP rotates it, so the
+// plugin never does (guidelines §1). One line per send, per request carried
+// out, per pairing and unlink. A skip, or a poll that could not reach the
+// toolbox, repeats every few minutes, so each reason is written at most once
+// an hour. Never the token, never the snapshot.
+
+function itb_log_path()
+{
+	global $settings;
+	$dir = isset($settings['logDirectory']) && is_string($settings['logDirectory']) && $settings['logDirectory'] !== ''
+		? rtrim($settings['logDirectory'], '/')
+		: itb_media_dir() . '/logs';
+	return $dir . '/plugin-' . ITB_PLUGIN . '.log';
+}
+
+function itb_log($message)
+{
+	$line = itb_now() . ' ' . str_replace(array("\r", "\n"), ' ', (string) $message) . "\n";
+	@file_put_contents(itb_log_path(), $line, FILE_APPEND | LOCK_EX);
+}
+
+/** itb_log, but quiet if the same reason was already logged within the hour. */
+function itb_log_quietly($reason, $message)
+{
+	$seen = json_decode((string) itb_read_private('quiet.json'), true);
+	if (!is_array($seen))
+		$seen = array();
+	$last = isset($seen[$reason]) && is_numeric($seen[$reason]) ? (int) $seen[$reason] : 0;
+	if (time() - $last < ITB_LOG_QUIET_SECONDS)
+		return;
+	$seen[$reason] = time();
+	itb_write_private('quiet.json', itb_encode($seen));
+	itb_log($message);
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
@@ -150,7 +280,9 @@ function itb_http($method, $url, $body = null, $headers = array(), $timeout = 15
 	$out = curl_exec($ch);
 	$status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 	$err = curl_error($ch);
-	curl_close($ch);
+	// A no-op since PHP 8, and deprecated from 8.5 (FPP 10 on macOS runs 8.5).
+	if (PHP_VERSION_ID < 80000)
+		curl_close($ch);
 
 	return array($status, $out === false ? '' : $out, $err);
 }
@@ -195,12 +327,21 @@ function itb_local_json($path, &$errors)
  * setting, a Wi-Fi PSK in a network block, or an API key inside another
  * plugin's config all get the same treatment. Better to lose a harmless
  * setting whose name happens to match than to ship one that matters.
+ *
+ * At least as wide as the redactor FPP runs over its own crash reports
+ * (guidelines §14.4): password, passwd, passphrase, passcode, pwd, psk,
+ * secret, token or credential anywhere in the key; pass, key, auth or pat
+ * when not followed by a lower-case letter — so apikey, mailpass and
+ * authToken are caught and keyframe is not. That lookahead is
+ * case-sensitive, as FPP's is, hence the (?i:...) group rather than a /i on
+ * the whole pattern.
  */
 function itb_is_secret_key($key)
 {
-	return is_string($key) && preg_match(
-		'/pass|passwd|secret|token|psk|apikey|api_key|privatekey|private_key|authorization|cookie|credential/i',
-		$key) === 1;
+	if (!is_string($key))
+		return false;
+	return preg_match('/password|passwd|passphrase|passcode|pwd|psk|secret|token|credential|apikey|api_key|privatekey|private_key|authorization|cookie/i', $key) === 1
+		|| preg_match('/(?i:pass|key|auth|pat)(?![a-z])/', $key) === 1;
 }
 
 function itb_redact($value)
@@ -218,12 +359,88 @@ function itb_redact($value)
 	return $out;
 }
 
+/**
+ * FPP's privacy settings: the operator's answers to FPP about their own data
+ * (guidelines §14.9). Not the plugin's business, so they are taken out of
+ * the settings before anything else looks at them, wherever in the answer
+ * they sit — as a key, and as a name in a settings group's list.
+ */
+function itb_privacy_setting_keys()
+{
+	return array('statsPublish', 'statsPublishUrl', 'ShareCrashData', 'FetchVendorLogos',
+		'SendVendorSerial', 'SendVendorLogos', 'privacyConsent', 'LegalJurisdiction');
+}
+
+function itb_drop_privacy_settings($value)
+{
+	if (!is_array($value))
+		return $value;
+	$drop = itb_privacy_setting_keys();
+	$isList = array_keys($value) === range(0, count($value) - 1);
+	$out = array();
+	foreach ($value as $key => $item) {
+		if ($isList ? is_string($item) && in_array($item, $drop, true) : is_string($key) && in_array($key, $drop, true))
+			continue;
+		$item = itb_drop_privacy_settings($item);
+		if ($isList)
+			$out[] = $item;
+		else
+			$out[$key] = $item;
+	}
+	return $out;
+}
+
+// ── Hardware identifiers ────────────────────────────────────────────────────
+// A MAC address, a CPU or cape serial number, a machine or FPP uuid: each
+// names this one piece of hardware for good, which the toolbox has no use
+// for (guidelines §14.1). They are removed, not redacted, wherever they turn
+// up in the snapshot — /api/network/interface carries MACs, /api/system/info
+// a uuid, /api/cape a serial. MACs are recognised by their shape, whatever
+// the key (ip's "address" inside a link block is one); serials and uuids by
+// their key, and only when the value is a string or a long number, so a
+// switch called serialSomething that is 0 or 1 survives.
+
+function itb_is_mac($value)
+{
+	return is_string($value) && preg_match('/^\s*[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}\s*$/', $value) === 1;
+}
+
+function itb_is_identifier_key($key)
+{
+	return is_string($key) && preg_match('/serial|uuid|cpuid|hwid|machine.?id/i', $key) === 1;
+}
+
+function itb_strip_identifiers($value)
+{
+	if (!is_array($value))
+		return $value;
+
+	$isList = array_keys($value) === range(0, count($value) - 1);
+	$out = array();
+	foreach ($value as $key => $item) {
+		if (itb_is_mac($item))
+			continue;
+		if (itb_is_identifier_key($key) && !is_array($item)
+			&& ((is_string($item) && trim($item) !== '') || (is_numeric($item) && strlen((string) $item) >= 6)))
+			continue;
+		$item = itb_strip_identifiers($item);
+		if ($isList)
+			$out[] = $item;
+		else
+			$out[$key] = $item;
+	}
+	return $out;
+}
+
 // ── Identity ────────────────────────────────────────────────────────────────
 
 /**
- * What this player calls itself to the toolbox. FPP's uuid when it reports
- * one — that survives a hostname change — otherwise the hostname. Reduced to
- * the characters the toolbox accepts in a device id.
+ * What this player calls itself to the toolbox, chosen once at pairing. A
+ * hash of FPP's uuid when it reports one — that survives a hostname change —
+ * otherwise of the hostname, so the toolbox can tell this player from the
+ * next without ever being given the uuid itself. A player paired by 1.1
+ * keeps the id it has (the raw uuid or hostname then): its token was issued
+ * for that id, and changing it would orphan the player on the account.
  */
 function itb_device_id($info)
 {
@@ -239,11 +456,7 @@ function itb_device_id($info)
 	if ($raw === '')
 		$raw = gethostname() ?: 'fpp';
 
-	$id = preg_replace('/[^A-Za-z0-9._-]+/', '-', $raw);
-	$id = ltrim($id, '._-');
-	if ($id === '')
-		$id = 'fpp';
-	return substr($id, 0, 64);
+	return substr(hash('sha256', 'itb:' . $raw), 0, 16);
 }
 
 function itb_hostname($info)
@@ -382,6 +595,230 @@ function itb_capture_files(&$errors)
 	return $files;
 }
 
+// ── Controllers ─────────────────────────────────────────────────────────────
+// "Is the controller even on?" is the first question about a dark prop, and
+// the player is the one machine that can answer it from inside the show
+// network. Two lists: the FPP systems this player has heard on the network
+// (fppd's MultiSync discovery — Falcons, other FPP players, ESPixelSticks),
+// and every address this player's E1.31 / ArtNet / DDP outputs send to, each
+// pinged once.
+
+/** A dotted IPv4 address a player could ping: not multicast, not broadcast, not 0.0.0.0. */
+function itb_unicast_ipv4($address)
+{
+	if (!is_string($address) || !preg_match('/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/', trim($address), $m))
+		return false;
+	for ($i = 1; $i <= 4; $i++) {
+		if ((int) $m[$i] > 255)
+			return false;
+	}
+	$first = (int) $m[1];
+	$last = (int) $m[4];
+	if ($first === 0 || ($first >= 224 && $first <= 239) || $last === 255)
+		return false;
+	return trim($address);
+}
+
+/** FPP's universe type number, in words: what the toolbox shows next to the address. */
+function itb_universe_protocol($type)
+{
+	if (!is_numeric($type))
+		return null;
+	switch ((int) $type) {
+		case 0: case 1: return 'e131';
+		case 2: case 3: case 9: return 'artnet';
+		case 4: case 5: return 'ddp';
+		case 6: case 7: return 'kinet';
+	}
+	return null;
+}
+
+/**
+ * The systems fppd has discovered, each cut down to what a person would use
+ * to recognise it: name, address, what it is, its firmware and mode, the
+ * channels it says it handles, when it was last heard, and whether it is
+ * this player. Not its uuid, serial or MAC (see itb_strip_identifiers).
+ */
+function itb_multisync_systems($answer, &$errors)
+{
+	$list = is_array($answer) && isset($answer['systems']) && is_array($answer['systems']) ? $answer['systems'] : $answer;
+	if (!is_array($list))
+		return array();
+
+	$systems = array();
+	foreach ($list as $sys) {
+		if (!is_array($sys))
+			continue;
+		if (count($systems) >= ITB_MAX_CONTROLLERS) {
+			$errors[] = '/api/fppd/multiSyncSystems: only the first ' . ITB_MAX_CONTROLLERS . ' systems were captured';
+			break;
+		}
+		$text = function ($key) use ($sys) {
+			return isset($sys[$key]) && (is_string($sys[$key]) || is_numeric($sys[$key])) ? (string) $sys[$key] : null;
+		};
+		$systems[] = array(
+			'hostname' => $text('hostname'),
+			'address' => $text('address'),
+			'type' => $text('type'),
+			'model' => $text('model'),
+			'version' => $text('version'),
+			'mode' => $text('fppModeString'),
+			'channelRanges' => $text('channelRanges'),
+			'lastSeen' => $text('lastSeenStr'),
+			'local' => !empty($sys['local']),
+		);
+	}
+	usort($systems, function ($a, $b) {
+		return strcmp((string) $a['address'] . ' ' . (string) $a['hostname'], (string) $b['address'] . ' ' . (string) $b['hostname']);
+	});
+	return $systems;
+}
+
+/**
+ * One entry per address this player's network outputs send to, from
+ * co-universes.json as already captured: the protocols and universe ids
+ * that go there, and whether FPP is asked to monitor any of them. Outputs
+ * and universes switched off are left out — they send nothing.
+ */
+function itb_output_targets($universesFile, &$errors)
+{
+	$targets = array();
+	if (!is_array($universesFile) || !isset($universesFile['channelOutputs']) || !is_array($universesFile['channelOutputs']))
+		return $targets;
+
+	foreach ($universesFile['channelOutputs'] as $output) {
+		if (!is_array($output) || (isset($output['enabled']) && !$output['enabled']))
+			continue;
+		if (!isset($output['universes']) || !is_array($output['universes']))
+			continue;
+		foreach ($output['universes'] as $u) {
+			if (!is_array($u) || (isset($u['active']) && !$u['active']))
+				continue;
+			$address = itb_unicast_ipv4(isset($u['address']) ? $u['address'] : '');
+			if ($address === false)
+				continue;
+			if (!isset($targets[$address])) {
+				if (count($targets) >= ITB_MAX_CONTROLLERS) {
+					$errors[] = 'controllers: only the first ' . ITB_MAX_CONTROLLERS . ' output addresses were checked';
+					break 2;
+				}
+				$targets[$address] = array('address' => $address, 'protocols' => array(), 'universes' => array(), 'monitored' => false);
+			}
+			$protocol = itb_universe_protocol(isset($u['type']) ? $u['type'] : null);
+			if ($protocol !== null && !in_array($protocol, $targets[$address]['protocols'], true))
+				$targets[$address]['protocols'][] = $protocol;
+			if (isset($u['id']) && is_numeric($u['id']) && !in_array((int) $u['id'], $targets[$address]['universes'], true))
+				$targets[$address]['universes'][] = (int) $u['id'];
+			if (!empty($u['monitor']))
+				$targets[$address]['monitored'] = true;
+		}
+	}
+	ksort($targets, SORT_STRING);
+	foreach ($targets as &$t)
+		sort($t['universes']);
+	unset($t);
+	return array_values($targets);
+}
+
+/**
+ * Pings every address once, all at the same time, in one shell: one second
+ * to answer each, so the whole check takes about a second however many
+ * controllers there are. Returns address => milliseconds, or false for one
+ * that did not answer; null when there is no ping to run.
+ *
+ * The addresses are dotted IPv4 already (itb_unicast_ipv4), and are quoted
+ * anyway. On Linux, -W 1 gives each one second to answer; macOS's -W is in
+ * milliseconds and still waits a second more after it, so there -t 1 caps
+ * the whole ping at one second instead.
+ */
+function itb_ping_all($addresses)
+{
+	if (!$addresses)
+		return array();
+	$ping = trim((string) @shell_exec('command -v ping 2>/dev/null'));
+	if ($ping === '')
+		return null;
+
+	$wait = PHP_OS_FAMILY === 'Darwin' ? '-t 1' : '-W 1';
+	$script = '';
+	foreach ($addresses as $address) {
+		$a = escapeshellarg($address);
+		$script .= '( out=$(' . escapeshellarg($ping) . ' -c 1 ' . $wait . ' ' . $a . ' 2>/dev/null); rc=$?; '
+			. 't=$(printf "%s" "$out" | sed -n "s/.*time[=<] *\([0-9.]*\).*/\1/p" | head -n 1); '
+			. 'echo ' . $a . ' "$rc" "$t" ) &' . "\n";
+	}
+	$script .= "wait\n";
+
+	$out = array();
+	exec('/bin/sh -c ' . escapeshellarg($script) . ' 2>/dev/null', $out);
+
+	$results = array_fill_keys($addresses, false);
+	foreach ($out as $line) {
+		$parts = preg_split('/\s+/', trim($line));
+		if (count($parts) < 2 || !array_key_exists($parts[0], $results))
+			continue;
+		if ($parts[1] === '0')
+			$results[$parts[0]] = isset($parts[2]) && is_numeric($parts[2]) ? round((float) $parts[2], 1) : 0.0;
+	}
+	return $results;
+}
+
+/**
+ * The controllers block of the snapshot. Every part is optional: a call
+ * that fails is noted in $errors, and the rest still goes.
+ */
+function itb_capture_controllers($universesFile, &$errors)
+{
+	$answer = itb_local_json('/api/fppd/multiSyncSystems', $errors);
+	$systems = $answer === null ? array() : itb_multisync_systems($answer, $errors);
+
+	$targets = itb_output_targets($universesFile, $errors);
+	$addresses = array();
+	foreach ($targets as $t)
+		$addresses[] = $t['address'];
+
+	$checked = itb_now();
+	$pings = itb_ping_all($addresses);
+	if ($pings === null && $addresses)
+		$errors[] = 'controllers: ping is not available on this player, so reachability was not checked';
+
+	foreach ($targets as &$t) {
+		if ($pings === null) {
+			$t['reachable'] = null;
+			$t['ms'] = null;
+		} else {
+			$ms = $pings[$t['address']];
+			$t['reachable'] = $ms !== false;
+			$t['ms'] = $ms === false ? null : $ms;
+		}
+	}
+	unset($t);
+
+	return array('systems' => $systems, 'reachability' => $targets, 'checkedUtc' => $checked);
+}
+
+/**
+ * The controllers block without what moves on its own: when each system was
+ * last heard, how long each ping took, and when the check ran. What is left
+ * — which systems exist and which controllers answer — is a change worth a
+ * send; ping jitter is not.
+ */
+function itb_controllers_stable($controllers)
+{
+	if (!is_array($controllers))
+		return $controllers;
+	unset($controllers['checkedUtc']);
+	foreach (array('systems' => 'lastSeen', 'reachability' => 'ms') as $list => $volatile) {
+		if (isset($controllers[$list]) && is_array($controllers[$list])) {
+			foreach ($controllers[$list] as $i => $entry) {
+				if (is_array($entry))
+					unset($controllers[$list][$i][$volatile]);
+			}
+		}
+	}
+	return $controllers;
+}
+
 /**
  * Everything the toolbox should know about this player, as one document.
  *
@@ -391,8 +828,8 @@ function itb_capture_files(&$errors)
  *   schema, capturedUtc, plugin{name,version}, device{id,hostname}
  *   trigger, changed[], fingerprint   why it was sent and what moved — see itb_prepare()
  *   system{info,status}      /api/system/info, /api/system/status
- *   settings                 /api/settings
- *   network                  /api/network/interface
+ *   settings                 /api/settings, without FPP's privacy settings
+ *   network                  /api/network/interface, without MAC addresses
  *   cape                     /api/cape (null when there is none)
  *   ports                    /api/fppd/ports (port/eFuse status, where the cape reports it)
  *   outputProcessors         /api/channel/output/processors
@@ -402,7 +839,13 @@ function itb_capture_files(&$errors)
  *   files{sequences,sequenceMeta,music}   /api/files/sequences, /api/sequence/:name/meta, /api/files/music
  *   configFileNames          every file /api/configfile lists
  *   configFiles{name:body}   the ones itb_wanted_config() keeps, parsed when they are JSON
+ *   controllers{systems[],reachability[],checkedUtc}
+ *                            /api/fppd/multiSyncSystems, and a ping of every address in
+ *                            co-universes.json — see itb_capture_controllers()
  *   errors[]                 what could not be captured, and why
+ *
+ * The whole document then loses every hardware identifier
+ * (itb_strip_identifiers) and every credential-shaped value (itb_redact).
  */
 function itb_build_snapshot()
 {
@@ -410,7 +853,8 @@ function itb_build_snapshot()
 
 	$info = itb_local_json('/api/system/info', $errors);
 	$status = itb_local_json('/api/system/status', $errors);
-	$settings = itb_local_json('/api/settings', $errors);
+	// Taken out before anything else sees them; see itb_drop_privacy_settings.
+	$settings = itb_drop_privacy_settings(itb_local_json('/api/settings', $errors));
 	$network = itb_local_json('/api/network/interface', $errors);
 	$cape = itb_local_json('/api/cape', $errors);
 	$ports = itb_local_json('/api/fppd/ports', $errors);
@@ -478,11 +922,14 @@ function itb_build_snapshot()
 		$configFiles[$name] = ($decoded === null && json_last_error() !== JSON_ERROR_NONE) ? $out : $decoded;
 	}
 
+	$controllers = itb_capture_controllers(isset($configFiles['co-universes.json']) ? $configFiles['co-universes.json'] : null, $errors);
+
 	$snapshot = array(
 		'schema' => ITB_SCHEMA,
 		'capturedUtc' => itb_now(),
 		'plugin' => array('name' => ITB_PLUGIN, 'version' => ITB_PLUGIN_VERSION),
 		'device' => array(
+			// The id the player was paired under; before pairing (the preview), the one it would get.
 			'id' => itb_setting('deviceId', itb_device_id($info)),
 			'hostname' => itb_hostname($info),
 		),
@@ -498,10 +945,11 @@ function itb_build_snapshot()
 		'files' => $files,
 		'configFileNames' => $names,
 		'configFiles' => $configFiles,
+		'controllers' => $controllers,
 		'errors' => $errors,
 	);
 
-	return itb_redact($snapshot);
+	return itb_redact(itb_strip_identifiers($snapshot));
 }
 
 function itb_encode($snapshot)
@@ -548,7 +996,8 @@ function itb_status_fppd($snapshot)
  * is playing), port and eFuse readings and the CPU/memory figures all move
  * from one minute to the next without anyone touching the player. The
  * warnings and whether fppd is running are the two live facts that are worth
- * a send, so they come back in under their own keys.
+ * a send, so they come back in under their own keys. The controllers block
+ * goes in without its timings (itb_controllers_stable).
  */
 function itb_fingerprint($snapshot)
 {
@@ -560,6 +1009,8 @@ function itb_fingerprint($snapshot)
 		if (isset($stable['system']['info']) && is_array($stable['system']['info']))
 			unset($stable['system']['info']['Utilization']);
 	}
+	if (isset($stable['controllers']))
+		$stable['controllers'] = itb_controllers_stable($stable['controllers']);
 	$stable['_warnings'] = itb_status_warnings($snapshot);
 	$stable['_fppd'] = itb_status_fppd($snapshot);
 	return itb_hash($stable);
@@ -579,6 +1030,7 @@ function itb_section_hashes($snapshot)
 	$sections['warnings'] = itb_hash(itb_status_warnings($snapshot));
 	$sections['fppd'] = itb_hash(itb_status_fppd($snapshot));
 	$sections['files'] = itb_hash(isset($snapshot['files']) ? $snapshot['files'] : null);
+	$sections['controllers'] = itb_hash(itb_controllers_stable(isset($snapshot['controllers']) ? $snapshot['controllers'] : null));
 	if (isset($snapshot['configFiles']) && is_array($snapshot['configFiles'])) {
 		foreach ($snapshot['configFiles'] as $name => $body)
 			$sections['configFiles.' . $name] = itb_hash($body);
@@ -653,10 +1105,14 @@ function itb_toolbox_error($status, $out, $err, $fallback)
  * Trades a pairing code for a device token and remembers it. Whatever the
  * plugin remembered about a previous link — last send, last request, what
  * was last sent — is cleared, since it was about another account.
+ *
+ * The toolbox address is the one in the settings file (the default unless
+ * someone running their own toolbox edited it there by hand); nothing a
+ * request carries can change where the token goes.
  */
-function itb_pair($code, $apiBaseUrl = '')
+function itb_pair($code)
 {
-	$api = rtrim($apiBaseUrl !== '' ? $apiBaseUrl : itb_api_base(), '/');
+	$api = itb_api_base();
 	if (!preg_match('#^https?://[^\s/]+#', $api))
 		return array('ok' => false, 'error' => 'The toolbox address must start with https://.');
 
@@ -666,28 +1122,41 @@ function itb_pair($code, $apiBaseUrl = '')
 
 	$errors = array();
 	$info = itb_local_json('/api/system/info', $errors);
-	$deviceId = itb_device_id($info);
+	// Pairing again while still linked keeps the id the player already has,
+	// so it stays the same player on the account.
+	$deviceId = itb_token() !== '' && itb_setting('deviceId') !== '' ? itb_setting('deviceId') : itb_device_id($info);
 	$hostname = itb_hostname($info);
 
 	$body = itb_encode(array('code' => $code, 'deviceId' => $deviceId, 'hostname' => $hostname));
 	list($status, $out, $err) = itb_http('POST', $api . '/api/fpp/pair/claim', $body,
 		array('Content-Type: application/json'), 30);
 
-	if ($status !== 200)
-		return array('ok' => false, 'error' => itb_toolbox_error($status, $out, $err, 'The toolbox refused the code'));
+	if ($status !== 200) {
+		$message = itb_toolbox_error($status, $out, $err, 'The toolbox refused the code');
+		itb_log('pairing failed: ' . $message);
+		return array('ok' => false, 'error' => $message);
+	}
 
 	$data = json_decode($out, true);
-	if (!is_array($data) || empty($data['token']) || empty($data['username']))
+	if (!is_array($data) || empty($data['token']) || !is_string($data['token']) || empty($data['username'])) {
+		itb_log('pairing failed: the toolbox answered without a token');
 		return array('ok' => false, 'error' => 'The toolbox answered, but not with a token. Try again.');
+	}
+	if (!itb_set_token($data['token'])) {
+		itb_log('pairing failed: could not write ' . itb_data_dir() . '/token');
+		return array('ok' => false, 'error' => 'Paired, but this player could not store its token in ' . itb_data_dir() . '. Try again.');
+	}
 
 	itb_set('apiBaseUrl', $api);
-	itb_set('deviceToken', $data['token']);
+	if (itb_setting('deviceToken') !== '')
+		itb_set('deviceToken', '');
 	itb_set('deviceId', $deviceId);
 	itb_set('username', $data['username']);
 	itb_set('tokenExpiresUtc', isset($data['expiresUtc']) ? $data['expiresUtc'] : '');
 	foreach (array('lastSyncUtc', 'lastSyncResult', 'lastSyncError', 'lastTrigger', 'lastCommandUtc', 'lastCommandType', 'lastCommandResult') as $key)
 		itb_set($key, '');
 	itb_clear_state();
+	itb_log('paired with @' . $data['username'] . ' as ' . $deviceId);
 
 	return array('ok' => true, 'username' => $data['username'], 'deviceId' => $deviceId, 'hostname' => $hostname);
 }
@@ -695,10 +1164,12 @@ function itb_pair($code, $apiBaseUrl = '')
 /** Forgets the token and what was last sent. What the toolbox already holds stays until removed there. */
 function itb_unlink()
 {
-	foreach (array('deviceToken', 'deviceId', 'username', 'tokenExpiresUtc', 'lastSyncUtc', 'lastSyncResult', 'lastSyncError',
+	itb_forget_token();
+	foreach (array('deviceId', 'username', 'tokenExpiresUtc', 'lastSyncUtc', 'lastSyncResult', 'lastSyncError',
 		'lastTrigger', 'lastCommandUtc', 'lastCommandType', 'lastCommandResult') as $key)
 		itb_set($key, '');
 	itb_clear_state();
+	itb_log('unlinked; the device token was deleted');
 	return array('ok' => true);
 }
 
@@ -718,13 +1189,17 @@ function itb_unlink()
  */
 function itb_sync($auto = false, $trigger = 'manual')
 {
-	if ($auto && itb_setting('autoSync', '1') !== '1')
+	if ($auto && itb_setting('autoSync', '1') !== '1') {
+		itb_log_quietly('sync-off', 'not sending (' . $trigger . '): Send automatically is off');
 		return array('ok' => false, 'skipped' => true, 'error' => 'Auto-sync is off.');
+	}
 
-	$token = itb_setting('deviceToken');
+	$token = itb_token();
 	$deviceId = itb_setting('deviceId');
-	if ($token === '' || $deviceId === '')
+	if ($token === '' || $deviceId === '') {
+		itb_log_quietly('sync-unlinked', 'not sending (' . $trigger . '): this player is not linked');
 		return array('ok' => false, 'error' => 'This player is not linked to a toolbox account yet.');
+	}
 
 	list($snapshot, $sections, $state) = itb_prepare($trigger);
 
@@ -732,8 +1207,10 @@ function itb_sync($auto = false, $trigger = 'manual')
 		$sameAsLast = isset($state['fingerprint']) && $state['fingerprint'] === $snapshot['fingerprint'];
 		if ($sameAsLast) {
 			$sentAt = isset($state['sentUtc']) && is_string($state['sentUtc']) ? strtotime($state['sentUtc']) : false;
-			if ($sentAt !== false && time() - $sentAt < ITB_RESEND_AFTER_SECONDS)
+			if ($sentAt !== false && time() - $sentAt < ITB_RESEND_AFTER_SECONDS) {
+				itb_log_quietly('sync-unchanged', 'not sending (timer): nothing changed since the last send');
 				return array('ok' => true, 'skipped' => true, 'reason' => 'unchanged', 'fingerprint' => $snapshot['fingerprint']);
+			}
 		} else {
 			$snapshot['trigger'] = 'change';
 		}
@@ -741,8 +1218,10 @@ function itb_sync($auto = false, $trigger = 'manual')
 	$trigger = $snapshot['trigger'];
 
 	$json = itb_encode($snapshot);
-	if ($json === false)
+	if ($json === false) {
+		itb_log('send (' . $trigger . ') failed: could not encode the snapshot: ' . json_last_error_msg());
 		return itb_record_sync(false, 'Could not encode the snapshot: ' . json_last_error_msg(), null, $trigger);
+	}
 
 	list($status, $out, $err) = itb_http('PUT', itb_api_base() . '/api/fpp/devices/' . rawurlencode($deviceId), $json,
 		array('Content-Type: application/json', 'Authorization: Bearer ' . $token), 90);
@@ -756,6 +1235,7 @@ function itb_sync($auto = false, $trigger = 'manual')
 			'sentUtc' => $sentUtc,
 		));
 		itb_record_sync(true, '', null, $trigger);
+		itb_log('sent (' . $trigger . '), ' . strlen($json) . ' bytes' . ($snapshot['changed'] ? ', changed: ' . implode(', ', $snapshot['changed']) : ''));
 		return array(
 			'ok' => true,
 			'sentUtc' => $sentUtc,
@@ -774,6 +1254,7 @@ function itb_sync($auto = false, $trigger = 'manual')
 	else
 		$message = itb_toolbox_error($status, $out, $err, 'The toolbox refused the snapshot');
 
+	itb_log('send (' . $trigger . ') failed, ' . strlen($json) . ' bytes: ' . $message);
 	return itb_record_sync(false, $message, $status, $trigger);
 }
 
@@ -815,7 +1296,7 @@ function itb_poll()
 	// script limit.
 	@set_time_limit(0);
 
-	$token = itb_setting('deviceToken');
+	$token = itb_token();
 	$deviceId = itb_setting('deviceId');
 	if ($token === '' || $deviceId === '')
 		return array('ok' => false, 'skipped' => true, 'error' => 'This player is not linked to a toolbox account yet.');
@@ -829,10 +1310,14 @@ function itb_poll()
 	if ($status === 401) {
 		$message = 'The toolbox no longer accepts this player\'s token. Pair again.';
 		itb_record_command('claim', false, $message);
+		itb_log_quietly('poll-401', 'listening for requests: ' . $message);
 		return array('ok' => false, 'skipped' => true, 'error' => $message, 'httpStatus' => 401);
 	}
-	if ($status !== 200)
-		return array('ok' => false, 'error' => itb_toolbox_error($status, $out, $err, 'The toolbox did not answer the poll'), 'httpStatus' => $status);
+	if ($status !== 200) {
+		$message = itb_toolbox_error($status, $out, $err, 'The toolbox did not answer the poll');
+		itb_log_quietly('poll-error', 'listening for requests: ' . $message);
+		return array('ok' => false, 'error' => $message, 'httpStatus' => $status);
+	}
 
 	$claim = json_decode($out, true);
 	$commands = is_array($claim) && isset($claim['commands']) && is_array($claim['commands']) ? $claim['commands'] : array();
@@ -842,8 +1327,10 @@ function itb_poll()
 		if (!is_array($cmd) || !isset($cmd['id']) || !is_string($cmd['id']) || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $cmd['id']))
 			continue;
 		$type = isset($cmd['type']) && is_string($cmd['type']) ? $cmd['type'] : '';
+		itb_log('request ' . $cmd['id'] . ': ' . ($type !== '' ? $type : '(no type)'));
 		$result = itb_run_command($cmd);
 		itb_record_command($type, $result['ok'], $result['message']);
+		itb_log('request ' . $cmd['id'] . ' ' . ($result['ok'] ? 'done' : 'failed') . ': ' . $result['message']);
 		itb_http('POST', itb_commands_url($deviceId, '/' . rawurlencode($cmd['id']) . '/result'),
 			itb_encode(array('ok' => $result['ok'], 'message' => $result['message'])), $auth, 30);
 		$ran++;
@@ -878,10 +1365,7 @@ function itb_run_command($cmd)
 			return array('ok' => false, 'message' => isset($sync['error']) ? $sync['error'] : 'The snapshot was not sent.');
 
 		case 'restart_fppd':
-			list($status, $out, $err) = itb_local('/api/system/fppd/restart');
-			if ($status === 200)
-				return array('ok' => true, 'message' => 'fppd restart requested (HTTP 200)');
-			return array('ok' => false, 'message' => 'fppd restart failed: ' . ($status ? 'HTTP ' . $status : ($err ?: 'no answer')));
+			return itb_request_restart();
 
 		case 'test_lights':
 			return itb_test_lights($args);
@@ -895,6 +1379,21 @@ function itb_run_command($cmd)
 		default:
 			return array('ok' => false, 'message' => 'unknown command' . ($type !== '' ? ': ' . $type : ''));
 	}
+}
+
+/**
+ * Asks FPP for an fppd restart the way the plugin guidelines require (§3.6,
+ * §4.1): by setting FPP's restart flag through its settings API, never by
+ * restarting fppd itself, which would cut off a show mid-sequence. FPP then
+ * shows its "FPPD Restart Required" banner on its pages, and fppd restarts
+ * when someone presses Restart FPPD there, or when the player next boots.
+ */
+function itb_request_restart()
+{
+	list($status, $out, $err) = itb_http('PUT', ITB_LOCAL_API . '/api/settings/restartFlag', '1', array('Content-Type: text/plain'));
+	if ($status === 200)
+		return array('ok' => true, 'message' => 'Restart flagged: FPP now shows "FPPD Restart Required", and fppd restarts when someone presses Restart FPPD on the player or it next boots');
+	return array('ok' => false, 'message' => 'Could not flag fppd for a restart: ' . ($status ? 'HTTP ' . $status : ($err ?: 'no answer')));
 }
 
 /**
@@ -947,7 +1446,7 @@ function itb_test_lights($args)
  */
 function itb_status($checkLink = false)
 {
-	$token = itb_setting('deviceToken');
+	$token = itb_token();
 	$deviceId = itb_setting('deviceId');
 	$status = array(
 		'pluginVersion' => ITB_PLUGIN_VERSION,

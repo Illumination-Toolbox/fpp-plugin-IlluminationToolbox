@@ -3,7 +3,7 @@
 # Installed by FPP after cloning the plugin. Safe to re-run ("Reinstall All"),
 # and an upgrade relies on that: the unit files are rewritten every time and
 # the units restarted, so a new cadence or a new script takes effect without
-# a reboot.
+# a reboot. FPP runs this as root.
 #
 # Side effects outside the plugin folder, all undone by fpp_uninstall.sh:
 #   /etc/systemd/system/fpp-illumination-toolbox-sync.service
@@ -14,21 +14,47 @@
 # when something changed, and at least once an hour regardless. The poll
 # service keeps scripts/poll.sh running so the player hears about requests
 # from the toolbox. Nothing is sent or asked for until the player is paired.
+#
+# Both run as the fpp user when there is one: all they do is call the
+# plugin's API on localhost, which needs no privileges. On a player without
+# systemd (FPP on macOS, say) there is nothing to install; the plugin's page
+# and Send now still work, and the timer and requests from the toolbox do not.
 
 set -e
 
-. "${FPPDIR:-/opt/fpp}/scripts/common"
+: "${FPPDIR:=/opt/fpp}"
+if [ -f "${FPPDIR}/scripts/common" ]; then
+	. "${FPPDIR}/scripts/common"
+fi
 
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLUGIN_LOG="${LOGDIR:-${MEDIADIR:-/home/fpp/media}/logs}/plugin-fpp-plugin-IlluminationToolbox.log"
 UNIT="fpp-illumination-toolbox-sync"
 POLL="fpp-illumination-toolbox-poll"
 
-SUDO=""
-if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
+# The log is the plugin's, written mostly by the web server as fpp; a line
+# from this root script must not leave it owned by root.
+log() {
+	echo "$1"
+	echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $1" >> "${PLUGIN_LOG}" 2>/dev/null || true
+	if id -u fpp >/dev/null 2>&1; then
+		chown fpp:fpp "${PLUGIN_LOG}" 2>/dev/null || true
+	fi
+}
 
 chmod +x "${PLUGIN_DIR}"/scripts/*.sh
 
-$SUDO tee "/etc/systemd/system/${UNIT}.service" >/dev/null <<EOF
+if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /etc/systemd/system ]; then
+	log "install: no systemd on this player, so the five-minute check and the request listener were not set up"
+	exit 0
+fi
+
+RUN_AS=""
+if id -u fpp >/dev/null 2>&1; then
+	RUN_AS="User=fpp"
+fi
+
+tee "/etc/systemd/system/${UNIT}.service" >/dev/null <<EOF
 [Unit]
 Description=Send this FPP player's configuration to the Illumination Toolbox
 After=network-online.target
@@ -36,10 +62,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+${RUN_AS}
 ExecStart=/bin/bash ${PLUGIN_DIR}/scripts/sync.sh auto
 EOF
 
-$SUDO tee "/etc/systemd/system/${UNIT}.timer" >/dev/null <<EOF
+tee "/etc/systemd/system/${UNIT}.timer" >/dev/null <<EOF
 [Unit]
 Description=Illumination Toolbox sync check, every five minutes
 
@@ -53,13 +80,14 @@ Unit=${UNIT}.service
 WantedBy=timers.target
 EOF
 
-$SUDO tee "/etc/systemd/system/${POLL}.service" >/dev/null <<EOF
+tee "/etc/systemd/system/${POLL}.service" >/dev/null <<EOF
 [Unit]
 Description=Listen for Illumination Toolbox requests to this FPP player
 After=network-online.target
 Wants=network-online.target
 
 [Service]
+${RUN_AS}
 ExecStart=/bin/bash ${PLUGIN_DIR}/scripts/poll.sh
 Restart=always
 RestartSec=10
@@ -68,12 +96,13 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-$SUDO systemctl daemon-reload
+systemctl daemon-reload
 # enable --now starts a unit that was not running; restart makes a unit that
 # was already running pick up the rewritten file, which is the upgrade case.
-$SUDO systemctl enable --now "${UNIT}.timer" >/dev/null 2>&1 || true
-$SUDO systemctl enable --now "${POLL}.service" >/dev/null 2>&1 || true
-$SUDO systemctl restart "${UNIT}.timer" >/dev/null 2>&1 || true
-$SUDO systemctl restart "${POLL}.service" >/dev/null 2>&1 || true
+systemctl enable --now "${UNIT}.timer" >/dev/null 2>&1 || true
+systemctl enable --now "${POLL}.service" >/dev/null 2>&1 || true
+systemctl restart "${UNIT}.timer" >/dev/null 2>&1 || true
+systemctl restart "${POLL}.service" >/dev/null 2>&1 || true
 
+log "install: version $(sed -n "s/.*define('ITB_PLUGIN_VERSION', '\([^']*\)').*/\1/p" "${PLUGIN_DIR}/lib/toolbox.php") installed; timer and request listener running${RUN_AS:+ as fpp}"
 echo "Illumination Toolbox plugin installed. Open Status/Control -> Illumination Toolbox to pair this player."

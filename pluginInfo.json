@@ -2,25 +2,44 @@
 	"repoName": "fpp-plugin-IlluminationToolbox",
 	"name": "Illumination Toolbox",
 	"author": "James Arrowood (Arrowood Industries)",
-	"description": "Links this player to your Illumination Toolbox account and sends its configuration - channel outputs, pixel strings, schedule, playlists, settings and current warnings - so the xLights AI and the other toolbox tools can see it when you ask for help. Passwords, keys and tokens are redacted on the player before anything leaves it.",
+	"description": "Links this player to your Illumination Toolbox account and sends its configuration to api.illuminationtoolbox.com: settings (with credentials and FPP's privacy settings removed), channel outputs, schedule, playlists, sequence and music file names, the installed plugin list, hostname and IP addresses, FPP version and hardware model, current warnings, the controllers it sends to and whether they answer, and the systems it has discovered on your network - so the xLights AI and the other toolbox tools can see it when you ask for help. It also carries out remote requests you make in the toolbox: a fresh snapshot, a light test, or flagging fppd for a restart. MAC addresses and serial numbers are removed on the player before anything leaves it.",
 	"homeURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox",
 	"srcURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox.git",
 	"bugURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/issues",
 	"iconURL": "https://raw.githubusercontent.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/main/icon.png",
 	"allowUpdates": 1,
+	"releaseNotesStyle": "gitHistory",
 	"privacy": {
 		"summary": "Sends this player's configuration, with passwords removed, to your Illumination Toolbox account, and carries out the requests you make there.",
 		"sends": [
 			{
 				"to": "api.illuminationtoolbox.com",
-				"what": "this player's settings, outputs, schedule, playlists, file list and warnings",
+				"what": "settings without credentials or FPP's privacy settings, outputs, schedule and warnings",
 				"why": "so the toolbox and its xLights AI can see how your show is set up",
 				"alwaysOn": false
 			},
 			{
 				"to": "api.illuminationtoolbox.com",
+				"what": "playlists, sequence and music file names, and the list of installed plugins",
+				"why": "so the toolbox and its xLights AI can see how your show is set up",
+				"alwaysOn": false
+			},
+			{
+				"to": "api.illuminationtoolbox.com",
+				"what": "this player's hostname, IP addresses, FPP version and hardware model",
+				"why": "so the toolbox can tell your players apart and answer for the right FPP version",
+				"alwaysOn": false
+			},
+			{
+				"to": "api.illuminationtoolbox.com",
+				"what": "the controllers it sends to, whether they answer, and other systems it found on your network",
+				"why": "so the xLights AI can tell a dark prop from a controller that is off",
+				"alwaysOn": false
+			},
+			{
+				"to": "api.illuminationtoolbox.com",
 				"what": "requests for work and the results of the ones it ran",
-				"why": "so you can ask the player for a snapshot or a light test from the toolbox",
+				"why": "so you can ask the player for a snapshot, a light test or a restart from the toolbox",
 				"alwaysOn": false
 			}
 		],
@@ -34,15 +53,9 @@
 			}
 		],
 		"closedCode": false,
-		"other": "Nothing is sent until you link the player with a code from your toolbox account. Once linked, the account's owner can ask this player through the toolbox for a fresh snapshot, a light test on a channel range, or an fppd restart; untick the remote requests box on the plugin's page to turn that off. Linking stores a device token on the player, which Unlink and uninstall remove."
+		"other": "Nothing is sent until you link the player with a code from your toolbox account. Once linked, the account's owner can ask this player through the toolbox for a fresh snapshot, a light test on a channel range, or an fppd restart; a restart request only sets FPP's own restart-required flag, and fppd restarts when you press Restart FPPD or the player next boots. Untick the remote requests box on the plugin's page to turn requests off. Anything whose name looks like a password, key or token is replaced on the player before sending. Linking stores a device token in the plugin's data folder, which Unlink and uninstall delete. The toolbox keeps the current snapshot plus up to ten earlier ones per player, deleted when you remove the player or delete your account. Privacy policy: https://www.illuminationtoolbox.com/privacy"
 	},
 	"versions": [
-		{
-			"minFPPVersion": "7.0",
-			"maxFPPVersion": "9.99",
-			"branch": "main",
-			"sha": ""
-		},
 		{
 			"minFPPVersion": "10.0",
 			"maxFPPVersion": "0",
