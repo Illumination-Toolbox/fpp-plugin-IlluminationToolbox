@@ -6,10 +6,45 @@
 	"homeURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox",
 	"srcURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox.git",
 	"bugURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/issues",
+	"iconURL": "https://raw.githubusercontent.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/main/icon.png",
 	"allowUpdates": 1,
+	"privacy": {
+		"summary": "Sends this player's configuration, with passwords removed, to your Illumination Toolbox account, and carries out the requests you make there.",
+		"sends": [
+			{
+				"to": "api.illuminationtoolbox.com",
+				"what": "this player's settings, outputs, schedule, playlists, file list and warnings",
+				"why": "so the toolbox and its xLights AI can see how your show is set up",
+				"alwaysOn": false
+			},
+			{
+				"to": "api.illuminationtoolbox.com",
+				"what": "requests for work and the results of the ones it ran",
+				"why": "so you can ask the player for a snapshot or a light test from the toolbox",
+				"alwaysOn": false
+			}
+		],
+		"collects": [],
+		"sensors": [],
+		"remoteAccess": "none",
+		"systemChanges": [
+			{
+				"kind": "service",
+				"what": "a systemd timer that checks for configuration changes every five minutes, and a service that asks the toolbox for requests"
+			}
+		],
+		"closedCode": false,
+		"other": "Nothing is sent until you link the player with a code from your toolbox account. Once linked, the account's owner can ask this player through the toolbox for a fresh snapshot, a light test on a channel range, or an fppd restart; untick the remote requests box on the plugin's page to turn that off. Linking stores a device token on the player, which Unlink and uninstall remove."
+	},
 	"versions": [
 		{
 			"minFPPVersion": "7.0",
+			"maxFPPVersion": "9.99",
+			"branch": "main",
+			"sha": ""
+		},
+		{
+			"minFPPVersion": "10.0",
 			"maxFPPVersion": "0",
 			"branch": "main",
 			"sha": ""
