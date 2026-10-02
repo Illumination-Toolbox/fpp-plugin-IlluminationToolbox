@@ -17,11 +17,14 @@ See exactly what is sent** opens the redacted snapshot as JSON.
 ## Install
 
 FPP → Content Setup → Plugin Manager → install from the plugin list, or paste
-the repository URL under *Install from URL*:
+the address of the plugin's `pluginInfo.json` under *Install from URL*:
 
 ```
-https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox.git
+https://raw.githubusercontent.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/main/pluginInfo.json
 ```
+
+FPP reads that file to find the repository and the branch to install; the
+repository's own `.git` address is not accepted there.
 
 ## Pair
 
