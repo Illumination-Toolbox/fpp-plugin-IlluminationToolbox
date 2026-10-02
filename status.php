@@ -3,8 +3,9 @@
  * Status / Control → Illumination Toolbox.
  *
  * Pair this player with a toolbox account, see when it last sent its
- * configuration, send it now, or stop. All of the work is behind the plugin's
- * own API (api.php); this page is the form in front of it.
+ * configuration, send it now, decide whether the toolbox may ask things of
+ * it, or stop. All of the work is behind the plugin's own API (api.php);
+ * this page is the form in front of it.
  */
 include_once __DIR__ . '/lib/toolbox.php';
 $itbApi = '/api/plugin/' . ITB_PLUGIN;
@@ -48,11 +49,26 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 		</dl>
 		<div class="itb-row">
 			<button type="button" class="buttons" id="itb-sync-now">Send now</button>
-			<label><input type="checkbox" id="itb-auto"> Send automatically (every hour, and when fppd starts)</label>
+			<label><input type="checkbox" id="itb-auto"> Send automatically (every five minutes when something changed, hourly regardless, and when fppd starts)</label>
 		</div>
 		<p class="itb-muted">
 			<a href="<?php echo htmlspecialchars($itbApi); ?>/preview" target="_blank" rel="noopener">See exactly what is sent</a>
 			— it opens as JSON in a new tab.
+		</p>
+	</div>
+
+	<div class="itb-card" id="itb-remote" style="display:none">
+		<h3>Requests from the toolbox</h3>
+		<dl class="itb-kv">
+			<dt>Remote requests</dt><dd id="itb-remote-state">—</dd>
+			<dt>Last request</dt><dd id="itb-last-request">—</dd>
+		</dl>
+		<div class="itb-row">
+			<label><input type="checkbox" id="itb-allow-remote"> Let the toolbox ask this player for a fresh snapshot, a light test, or an fppd restart</label>
+		</div>
+		<p class="itb-muted">
+			The player asks the toolbox whether anything is waiting; the toolbox never connects to the player.
+			A request that is not picked up within ten minutes lapses.
 		</p>
 	</div>
 
@@ -71,6 +87,10 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 (function () {
 	var API = <?php echo json_encode($itbApi); ?>;
 	var state = null;
+	var TRIGGERS = {
+		timer: 'hourly timer', change: 'a change was found', start: 'fppd started',
+		manual: 'Send now', pair: 'pairing', request: 'the toolbox asked'
+	};
 
 	function el(id) { return document.getElementById(id); }
 	function esc(s) {
@@ -108,6 +128,7 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 			el('itb-pair').addEventListener('click', pair);
 			el('itb-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') pair(); });
 			el('itb-sync').style.display = 'none';
+			el('itb-remote').style.display = 'none';
 		} else {
 			var link = s.link;
 			var linkLine = !link ? '' :
@@ -127,12 +148,28 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 			el('itb-unlink').addEventListener('click', unlink);
 
 			el('itb-sync').style.display = '';
-			el('itb-last-sent').textContent = when(s.lastSyncUtc);
+			var why = s.lastTrigger && TRIGGERS[s.lastTrigger] ? ' <span class="itb-muted">(' + esc(TRIGGERS[s.lastTrigger]) + ')</span>' : '';
+			el('itb-last-sent').innerHTML = when(s.lastSyncUtc) + (s.lastSyncUtc ? why : '');
 			var res = el('itb-last-result');
 			if (s.lastSyncResult === 'ok') { res.className = 'itb-ok'; res.textContent = 'Sent'; }
 			else if (s.lastSyncResult === 'error') { res.className = 'itb-bad itb-error'; res.textContent = s.lastSyncError || 'Failed'; }
 			else { res.className = 'itb-muted'; res.textContent = 'Not sent yet'; }
 			el('itb-auto').checked = !!s.autoSync;
+
+			el('itb-remote').style.display = '';
+			var remote = el('itb-remote-state');
+			if (s.allowRemote) { remote.className = 'itb-ok'; remote.textContent = 'listening'; }
+			else { remote.className = 'itb-muted'; remote.textContent = 'off'; }
+			var req = el('itb-last-request');
+			if (s.lastCommandType) {
+				var failed = /^failed:/.test(s.lastCommandResult || '');
+				req.className = failed ? 'itb-bad itb-error' : '';
+				req.textContent = s.lastCommandType + ' · ' + when(s.lastCommandUtc) + ' — ' + (s.lastCommandResult || 'done');
+			} else {
+				req.className = 'itb-muted';
+				req.textContent = 'None yet';
+			}
+			el('itb-allow-remote').checked = !!s.allowRemote;
 		}
 		el('itb-api').value = s.apiBaseUrl || '';
 	}
@@ -169,6 +206,10 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 
 	el('itb-auto').addEventListener('change', function () {
 		call('POST', '/settings', { autoSync: el('itb-auto').checked }).then(function (s) { state = Object.assign({}, state, s); render(); });
+	});
+
+	el('itb-allow-remote').addEventListener('change', function () {
+		call('POST', '/settings', { allowRemote: el('itb-allow-remote').checked }).then(function (s) { state = Object.assign({}, state, s); render(); });
 	});
 
 	el('itb-api-save').addEventListener('click', function () {

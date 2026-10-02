@@ -35,27 +35,57 @@ players on the account.
 
 ## When it sends
 
-- Once an hour (a systemd timer, installed by `scripts/fpp_install.sh`).
+- Every five minutes it checks for changes (a systemd timer, installed by
+  `scripts/fpp_install.sh`) and sends when something changed — an output, a
+  playlist, the schedule, a setting, a sequence file, a new warning. The
+  snapshot says which sections moved, so the toolbox can show what changed
+  since the last one.
+- At least once an hour regardless, so the toolbox still hears from a player
+  nothing has happened on.
 - About ninety seconds after fppd starts (`scripts/postStart.sh`).
 - Whenever you press **Send now**.
+- Whenever the toolbox asks (see below).
 
-Untick *Send automatically* to send only by hand.
+Untick *Send automatically* to send only by hand and when the toolbox asks.
+
+## Requests from the toolbox
+
+The toolbox cannot reach a player behind your router, so the player asks it:
+a small service (`scripts/poll.sh`) keeps a request open at the toolbox and
+carries out whatever comes back. Three requests exist:
+
+- **Snapshot** — send a fresh snapshot right now. The *Request snapshot*
+  button on the website and the xLights AI both use it, so "I just changed
+  the outputs, check again" works without walking to the player.
+- **Light test** — run FPP's RGB chase on a channel range for a few seconds,
+  so you can see which prop lights. It stops by itself.
+- **Restart fppd** — only when you ask for it explicitly.
+
+Untick *Let the toolbox ask this player…* on the status page to stop
+listening; the player then only sends on its own schedule. The status page
+shows whether it is listening and what the last request was. A request that
+is not picked up within ten minutes lapses.
 
 ## What the player keeps
 
 Pairing leaves a device token in `config/plugin.fpp-plugin-IlluminationToolbox`.
-It can upload this one player's snapshot to the toolbox and nothing else —
-it cannot read the account, its conversations, or another player. It lasts a
-year; pair again when it lapses. Uninstalling the plugin deletes the file.
+It can upload this one player's snapshot and pick up requests meant for this
+one player, and nothing else — it cannot read the account, its conversations,
+or another player. It lasts a year; pair again when it lapses.
+
+Beside it, `config/plugin.fpp-plugin-IlluminationToolbox.state.json` remembers
+a fingerprint of the last snapshot sent, so the five-minute check can tell a
+change from a repeat. Uninstalling the plugin deletes both files.
 
 ## How it works
 
 | Piece | Job |
 |---|---|
-| `lib/toolbox.php` | Pairing, snapshot building, redaction, sending |
-| `api.php` | `/api/plugin/fpp-plugin-IlluminationToolbox/{status,pair,sync,unlink,settings,preview}` |
+| `lib/toolbox.php` | Pairing, snapshot building, redaction, change detection, sending, answering requests |
+| `api.php` | `/api/plugin/fpp-plugin-IlluminationToolbox/{status,pair,sync,poll,unlink,settings,preview}` |
 | `status.php` | The page under Status / Control |
-| `scripts/sync.sh` | `POST …/sync?auto=1` on localhost; what the timer and the start hook run |
+| `scripts/sync.sh` | `POST …/sync?trigger=timer|start|manual` on localhost; what the timer and the start hook run |
+| `scripts/poll.sh` | `POST …/poll` in a loop; what the poll service runs |
 
 The snapshot is assembled entirely from the player's own REST API
 (`/api/system/info`, `/api/settings`, `/api/configfile/…`, `/api/schedule`,
@@ -63,6 +93,9 @@ and so on), never from files under the media directory, so it works the same
 on a Pi, a BeagleBone, or a virtual machine.
 
 Toolbox side: `FppController` in the Illumination Toolbox API, at `/api/fpp`.
+The player sends `PUT /api/fpp/devices/{id}` and claims requests with
+`POST /api/fpp/devices/{id}/commands/claim`, answering each at
+`POST /api/fpp/devices/{id}/commands/{commandId}/result`.
 
 ## Notes
 

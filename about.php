@@ -26,8 +26,18 @@
 
 	<h3>When it is sent</h3>
 	<p>
-		Once an hour, about ninety seconds after fppd starts, and whenever you press <b>Send now</b>.
-		Untick <i>Send automatically</i> on the status page to send only by hand.
+		Every five minutes the player checks whether anything changed and sends if so; at least once an hour
+		regardless; about ninety seconds after fppd starts; whenever you press <b>Send now</b>; and whenever
+		the toolbox asks for a fresh snapshot. Untick <i>Send automatically</i> on the status page to send only
+		by hand and on request.
+	</p>
+
+	<h3>Requests from the toolbox</h3>
+	<p>
+		The player asks the toolbox whether anyone has a request for it — a fresh snapshot, a short RGB chase
+		on a channel range so you can see which prop lights, or an fppd restart — and carries it out. The
+		toolbox never connects to the player. Untick <i>Let the toolbox ask this player…</i> on the status
+		page to stop listening.
 	</p>
 
 	<h3>Pairing</h3>
