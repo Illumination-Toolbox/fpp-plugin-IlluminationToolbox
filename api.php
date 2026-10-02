@@ -7,6 +7,13 @@
  * and scripts/poll.sh from the poll service. Every answer is JSON with an
  * "ok" field; failures say why in "error".
  *
+ * Every POST must say Content-Type: application/json, or it is refused with
+ * 415 before anything happens. FPP has no login by default, so any web page
+ * open in the operator's browser could otherwise post a plain form here and
+ * unlink the player or run a light test. A browser sends that header
+ * cross-site only after a preflight OPTIONS request, and FPP's API answers
+ * OPTIONS with 501, so the browser stops there.
+ *
  * FPP strips the hyphens from the plugin name to build the function names it
  * looks for, hence getEndpointsfpppluginIlluminationToolbox.
  */
@@ -26,6 +33,24 @@ function getEndpointsfpppluginIlluminationToolbox()
 	);
 }
 
+/**
+ * Null when the request is a POST that said it carries JSON; otherwise the
+ * 415 answer to return instead of doing anything.
+ */
+function fpppluginIlluminationToolboxRefuseNonJson()
+{
+	$type = '';
+	if (isset($_SERVER['CONTENT_TYPE']) && is_string($_SERVER['CONTENT_TYPE']))
+		$type = $_SERVER['CONTENT_TYPE'];
+	elseif (isset($_SERVER['HTTP_CONTENT_TYPE']) && is_string($_SERVER['HTTP_CONTENT_TYPE']))
+		$type = $_SERVER['HTTP_CONTENT_TYPE'];
+	$isPost = isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST';
+	if ($isPost && stripos(ltrim($type), 'application/json') === 0)
+		return null;
+	http_response_code(415);
+	return json(array('ok' => false, 'error' => 'Send this as a POST with Content-Type: application/json.'));
+}
+
 function fpppluginIlluminationToolboxBody()
 {
 	$raw = file_get_contents('php://input');
@@ -42,11 +67,13 @@ function fpppluginIlluminationToolboxStatus()
 	return json($status);
 }
 
-// POST {code, apiBaseUrl?} — pairs, then sends the first snapshot straight away.
+// POST {code} — pairs, then sends the first snapshot straight away.
 function fpppluginIlluminationToolboxPair()
 {
+	if (($refused = fpppluginIlluminationToolboxRefuseNonJson()) !== null)
+		return $refused;
 	$body = fpppluginIlluminationToolboxBody();
-	$result = itb_pair(isset($body['code']) ? $body['code'] : '', isset($body['apiBaseUrl']) ? trim($body['apiBaseUrl']) : '');
+	$result = itb_pair(isset($body['code']) && is_string($body['code']) ? $body['code'] : '');
 	if ($result['ok'])
 		$result['sync'] = itb_sync(false, 'pair');
 	return json($result);
@@ -58,6 +85,8 @@ function fpppluginIlluminationToolboxPair()
 // a person asked: always sends.
 function fpppluginIlluminationToolboxSync()
 {
+	if (($refused = fpppluginIlluminationToolboxRefuseNonJson()) !== null)
+		return $refused;
 	$trigger = isset($_GET['trigger']) && is_string($_GET['trigger']) ? $_GET['trigger'] : '';
 	if ($trigger === '' && isset($_GET['auto']) && $_GET['auto'] === '1')
 		$trigger = 'timer';
@@ -71,29 +100,32 @@ function fpppluginIlluminationToolboxSync()
 // what scripts/poll.sh calls in a loop. Holds for up to twenty seconds.
 function fpppluginIlluminationToolboxPoll()
 {
+	if (($refused = fpppluginIlluminationToolboxRefuseNonJson()) !== null)
+		return $refused;
 	return json(itb_poll());
 }
 
 function fpppluginIlluminationToolboxUnlink()
 {
+	if (($refused = fpppluginIlluminationToolboxRefuseNonJson()) !== null)
+		return $refused;
 	return json(itb_unlink());
 }
 
-// POST {autoSync?: bool, allowRemote?: bool, apiBaseUrl?: string}
+// POST {autoSync?: bool, allowRemote?: bool}. The toolbox address is not
+// one of them: it is fixed, and only a hand edit of the settings file moves it.
 function fpppluginIlluminationToolboxSettings()
 {
+	if (($refused = fpppluginIlluminationToolboxRefuseNonJson()) !== null)
+		return $refused;
 	$body = fpppluginIlluminationToolboxBody();
-	if (array_key_exists('autoSync', $body))
+	if (array_key_exists('autoSync', $body)) {
 		itb_set('autoSync', $body['autoSync'] ? '1' : '0');
-	if (array_key_exists('allowRemote', $body))
+		itb_log('Send automatically turned ' . ($body['autoSync'] ? 'on' : 'off'));
+	}
+	if (array_key_exists('allowRemote', $body)) {
 		itb_set('allowRemote', $body['allowRemote'] ? '1' : '0');
-	if (array_key_exists('apiBaseUrl', $body)) {
-		$api = rtrim(trim((string) $body['apiBaseUrl']), '/');
-		if ($api === '')
-			$api = ITB_DEFAULT_API;
-		if (!preg_match('#^https?://[^\s/]+#', $api))
-			return json(array('ok' => false, 'error' => 'The toolbox address must start with https://.'));
-		itb_set('apiBaseUrl', $api);
+		itb_log('requests from the toolbox turned ' . ($body['allowRemote'] ? 'on' : 'off'));
 	}
 	$status = itb_status(false);
 	$status['ok'] = true;
