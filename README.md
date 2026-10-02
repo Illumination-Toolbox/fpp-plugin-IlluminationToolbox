@@ -11,8 +11,14 @@ Needs FPP 10 or later.
 
 ## What is sent
 
-- Settings, from `/api/settings`, with FPP's eight privacy settings
-  (`statsPublish`, `ShareCrashData` and the rest) taken out.
+- The value of each of FPP's settings, read from FPP's own settings in
+  memory (FPP 10's `/api/settings` describes settings but does not give their
+  values). Skipped by name, so their values are never read: FPP's
+  credentials (UI and OS passwords, mail and MQTT logins, tether PSK, remote
+  token), anything named like a password, key or token, FPP's eight privacy
+  settings (`statsPublish`, `ShareCrashData` and the rest) and its
+  email-alert addresses. Any value shaped like an email address is left out
+  too.
 - Channel outputs and inputs (`co-*.json`, `ci-*.json`), output processors,
   pixel overlay models, GPIO and command presets.
 - The schedule, playlist names and up to 30 playlists.
@@ -139,10 +145,11 @@ Every `POST` to the plugin's routes must carry `Content-Type: application/json`
 your browser cannot post a plain form to the player and unlink it or run a
 light test. The timer and the poll service run as the `fpp` user.
 
-The snapshot is assembled entirely from the player's own REST API
-(`/api/system/info`, `/api/settings`, `/api/configfile/…`, `/api/schedule`,
-and so on), never from files under the media directory, so it works the same
-on a Pi, a BeagleBone, or a virtual machine.
+The snapshot is assembled from the player's own REST API
+(`/api/system/info`, `/api/configfile/…`, `/api/schedule`, and so on) and,
+for setting values, FPP's own settings already loaded in the request — never
+from files under the media directory — so it works the same on a Pi, a
+BeagleBone, or a virtual machine.
 
 Toolbox side: `FppController` in the Illumination Toolbox API, at `/api/fpp`.
 The player sends `PUT /api/fpp/devices/{id}` and claims requests with

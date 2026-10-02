@@ -361,9 +361,8 @@ function itb_redact($value)
 
 /**
  * FPP's privacy settings: the operator's answers to FPP about their own data
- * (guidelines §14.9). Not the plugin's business, so they are taken out of
- * the settings before anything else looks at them, wherever in the answer
- * they sit — as a key, and as a name in a settings group's list.
+ * (guidelines §14.9). Not the plugin's business, so itb_capture_settings()
+ * skips them by name and never reads their values.
  */
 function itb_privacy_setting_keys()
 {
@@ -371,22 +370,65 @@ function itb_privacy_setting_keys()
 		'SendVendorSerial', 'SendVendorLogos', 'privacyConsent', 'LegalJurisdiction');
 }
 
-function itb_drop_privacy_settings($value)
+/**
+ * The names of FPP's own settings that hold a credential: the UI password,
+ * the OS password, the mail and MQTT logins, the tether PSK, the remote
+ * token. Matched case-exactly, as FPP stores them, in addition to every
+ * credential-shaped name itb_is_secret_key() catches.
+ */
+function itb_core_credential_setting_keys()
 {
-	if (!is_array($value))
-		return $value;
-	$drop = itb_privacy_setting_keys();
-	$isList = array_keys($value) === range(0, count($value) - 1);
-	$out = array();
-	foreach ($value as $key => $item) {
-		if ($isList ? is_string($item) && in_array($item, $drop, true) : is_string($key) && in_array($key, $drop, true))
-			continue;
-		$item = itb_drop_privacy_settings($item);
-		if ($isList)
-			$out[] = $item;
-		else
-			$out[$key] = $item;
+	return array('password', 'osPassword', 'emailpass', 'emailuser', 'MQTTPassword', 'MQTTUsername',
+		'TetherPSK', 'remoteToken');
+}
+
+/**
+ * FPP's email-alert settings that hold someone's address or mail login. Not
+ * credentials, but personal, and nothing the toolbox needs to see; whether
+ * email is on and which port it uses are kept.
+ */
+function itb_personal_setting_keys()
+{
+	return array('emailAddress', 'emailguser', 'emailtoemail', 'emailfromtext', 'emailfromuser');
+}
+
+/**
+ * The player's settings, with their values.
+ *
+ * FPP 10's /api/settings answers with what each setting is — its label,
+ * type and default — but not what it is set to, so a snapshot built from it
+ * told the toolbox nothing about this player. The values are in FPP's own
+ * $settings, which every page and API call has loaded (guidelines §3.1).
+ *
+ * Reading that array whole would read FPP's credentials along with
+ * everything else, so it is filtered by NAME before any value is looked at:
+ * a credential, anything whose name looks like one, FPP's eight privacy
+ * settings and its email-alert addresses are skipped without their values
+ * ever being read. What
+ * is left is plain switches, numbers and short strings; anything else
+ * (arrays, long text) is left out rather than guessed at.
+ */
+function itb_capture_settings(&$errors)
+{
+	$all = isset($GLOBALS['settings']) && is_array($GLOBALS['settings']) ? $GLOBALS['settings'] : null;
+	if ($all === null) {
+		$errors[] = 'settings: FPP\'s settings were not loaded in this request';
+		return null;
 	}
+
+	$skip = array_merge(itb_core_credential_setting_keys(), itb_privacy_setting_keys(), itb_personal_setting_keys());
+	$out = array();
+	foreach (array_keys($all) as $key) {
+		if (!is_string($key) || $key === '' || in_array($key, $skip, true) || itb_is_secret_key($key))
+			continue;
+		$value = $all[$key];
+		if (is_bool($value) || is_int($value) || is_float($value))
+			$out[$key] = $value;
+		elseif (is_string($value) && strlen($value) <= 200 && !preg_match('/[^\s@]+@[^\s@]+\.[^\s@]+/', $value))
+			// An email address under any other name is left out too.
+			$out[$key] = $value;
+	}
+	ksort($out, SORT_NATURAL | SORT_FLAG_CASE);
 	return $out;
 }
 
@@ -828,7 +870,7 @@ function itb_controllers_stable($controllers)
  *   schema, capturedUtc, plugin{name,version}, device{id,hostname}
  *   trigger, changed[], fingerprint   why it was sent and what moved — see itb_prepare()
  *   system{info,status}      /api/system/info, /api/system/status
- *   settings                 /api/settings, without FPP's privacy settings
+ *   settings{name:value}     FPP's own $settings, without credentials or FPP's privacy settings
  *   network                  /api/network/interface, without MAC addresses
  *   cape                     /api/cape (null when there is none)
  *   ports                    /api/fppd/ports (port/eFuse status, where the cape reports it)
@@ -853,8 +895,9 @@ function itb_build_snapshot()
 
 	$info = itb_local_json('/api/system/info', $errors);
 	$status = itb_local_json('/api/system/status', $errors);
-	// Taken out before anything else sees them; see itb_drop_privacy_settings.
-	$settings = itb_drop_privacy_settings(itb_local_json('/api/settings', $errors));
+	// Real values from FPP's own settings, credentials and privacy settings
+	// skipped by name; see itb_capture_settings.
+	$settings = itb_capture_settings($errors);
 	$network = itb_local_json('/api/network/interface', $errors);
 	$cape = itb_local_json('/api/cape', $errors);
 	$ports = itb_local_json('/api/fppd/ports', $errors);
