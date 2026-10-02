@@ -14,7 +14,7 @@
 		"sends": [
 			{
 				"to": "api.illuminationtoolbox.com",
-				"what": "settings without credentials or FPP's privacy settings, outputs, schedule and warnings",
+				"what": "setting values without credentials, email addresses or FPP's privacy settings; outputs; warnings",
 				"why": "so the toolbox and its xLights AI can see how your show is set up",
 				"alwaysOn": false
 			},
