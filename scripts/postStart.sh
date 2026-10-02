@@ -5,4 +5,4 @@
 # giving fppd and Apache a moment, so starting the show is never held up.
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-( sleep 90; /bin/bash "${DIR}/sync.sh" auto ) >/dev/null 2>&1 &
+( sleep 90; /bin/bash "${DIR}/sync.sh" start ) >/dev/null 2>&1 &
