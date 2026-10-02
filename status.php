@@ -67,17 +67,6 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 		</div>
 	</section>
 
-	<details class="card mb-3">
-		<summary class="card-header">Advanced</summary>
-		<div class="card-body">
-			<label class="form-label" for="itb-api">Toolbox API</label>
-			<div class="input-group mb-2">
-				<input type="url" class="form-control" id="itb-api" spellcheck="false">
-				<button type="button" class="btn btn-outline-secondary" id="itb-api-save">Save</button>
-			</div>
-			<p class="small text-body-secondary mb-0">Leave this alone unless you run your own toolbox. Blank restores the default.</p>
-		</div>
-	</details>
 </div>
 </div>
 
@@ -178,7 +167,6 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 			}
 			el('itb-allow-remote').checked = !!s.allowRemote;
 		}
-		el('itb-api').value = s.apiBaseUrl || '';
 	}
 
 	function load(check) {
@@ -191,7 +179,7 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 		var btn = el('itb-pair');
 		var msg = el('itb-pair-msg');
 		btn.disabled = true; msg.textContent = '';
-		call('POST', '/pair', { code: code, apiBaseUrl: el('itb-api').value }).then(function (r) {
+		call('POST', '/pair', { code: code }).then(function (r) {
 			if (!r.ok) { msg.textContent = r.error || 'Pairing failed.'; btn.disabled = false; return; }
 			return load(true);
 		}).catch(function () { msg.textContent = 'Pairing failed.'; btn.disabled = false; });
@@ -217,13 +205,6 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 
 	el('itb-allow-remote').addEventListener('change', function () {
 		call('POST', '/settings', { allowRemote: el('itb-allow-remote').checked }).then(function (s) { state = Object.assign({}, state, s); render(); });
-	});
-
-	el('itb-api-save').addEventListener('click', function () {
-		call('POST', '/settings', { apiBaseUrl: el('itb-api').value }).then(function (s) {
-			if (!s.ok) { alert(s.error || 'Could not save.'); return; }
-			state = Object.assign({}, state, s); render();
-		});
 	});
 
 	load(true);

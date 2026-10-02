@@ -104,5 +104,6 @@ The player sends `PUT /api/fpp/devices/{id}` and claims requests with
 
 - If the player's web UI is password-protected, FPP still lets localhost
   call the API, which is all the timer and the page need.
-- The toolbox API address can be changed under *Advanced* on the status page,
-  for anyone running their own toolbox.
+- The plugin talks to `https://api.illuminationtoolbox.com`. Anyone running
+  their own toolbox can point it elsewhere by posting `{"apiBaseUrl": "…"}` to
+  the plugin's `settings` route; the status page no longer shows the field.
