@@ -2,7 +2,7 @@
 	"repoName": "fpp-plugin-IlluminationToolbox",
 	"name": "Illumination Toolbox",
 	"author": "James Arrowood (Arrowood Industries)",
-	"description": "Links this player to your Illumination Toolbox account and sends its configuration to api.illuminationtoolbox.com: settings (with credentials and FPP's privacy settings removed), channel outputs, schedule, playlists, sequence and music file names, the installed plugin list, hostname and IP addresses, FPP version and hardware model, current warnings, the controllers it sends to and whether they answer, and the systems it has discovered on your network - so the xLights AI and the other toolbox tools can see it when you ask for help. It also carries out remote requests you make in the toolbox: a fresh snapshot, a light test, or flagging fppd for a restart. MAC addresses and serial numbers are removed on the player before anything leaves it.",
+	"description": "Links this player to your Illumination Toolbox account and sends its configuration to api.illuminationtoolbox.com: settings (with credentials and FPP's privacy settings removed), channel outputs, schedule, playlists, sequence and music file names, the installed plugin list, hostname and IP addresses, FPP version and hardware model, free disk space, what it is playing at the moment and the playlists scheduled for the next nine days, current warnings, the controllers it sends to and whether they answer, and the systems it has discovered on your network - so the xLights AI and the other toolbox tools can see it when you ask for help. It also carries out remote requests you make in the toolbox: a fresh snapshot, a light test, or flagging fppd for a restart. MAC addresses and serial numbers are removed on the player before anything leaves it.",
 	"homeURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox",
 	"srcURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox.git",
 	"bugURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/issues",
@@ -28,6 +28,12 @@
 				"to": "api.illuminationtoolbox.com",
 				"what": "this player's hostname, IP addresses, FPP version and hardware model",
 				"why": "so the toolbox can tell your players apart and answer for the right FPP version",
+				"alwaysOn": false
+			},
+			{
+				"to": "api.illuminationtoolbox.com",
+				"what": "free disk space, what is playing at the moment, and the playlists the schedule starts in the next nine days",
+				"why": "so the xLights AI can tell you whether a show is running, whether tonight's show will start, and whether the player is out of space",
 				"alwaysOn": false
 			},
 			{

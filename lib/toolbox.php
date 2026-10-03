@@ -31,7 +31,7 @@
 
 if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
-	define('ITB_PLUGIN_VERSION', '1.2.0');
+	define('ITB_PLUGIN_VERSION', '1.3.0');
 	define('ITB_SCHEMA', 'illumination-toolbox.fpp-snapshot/1');
 	define('ITB_DEFAULT_API', 'https://api.illuminationtoolbox.com');
 	define('ITB_LOCAL_API', 'http://127.0.0.1');
@@ -46,6 +46,9 @@ if (!defined('ITB_PLUGIN')) {
 	define('ITB_MAX_SEQUENCE_META', 40);
 	/** Controllers: at most this many discovered systems, and this many output addresses pinged. */
 	define('ITB_MAX_CONTROLLERS', 64);
+	/** scheduleUpcoming: how far ahead it looks, and at most how many playlists it lists. */
+	define('ITB_UPCOMING_DAYS', 9);
+	define('ITB_MAX_UPCOMING', 50);
 	/** A skip, or a poll that could not reach the toolbox, is logged at most this often per reason. */
 	define('ITB_LOG_QUIET_SECONDS', 3600);
 }
@@ -861,6 +864,346 @@ function itb_controllers_stable($controllers)
 	return $controllers;
 }
 
+// ── Storage, what is playing, what is coming up ─────────────────────────────
+// Three small blocks the xLights AI reads directly — "is the SD card full?",
+// "what is it playing right now?", "will the show start tonight?" — each
+// built from an answer FPP already gives and cut down to a fixed shape. A
+// value FPP does not give is null, or the whole block is left out; nothing
+// here is guessed.
+
+/** A byte count as an integer, or null. FPP's disk figures come from PHP's disk_*_space, which answers floats. */
+function itb_bytes($value)
+{
+	return is_numeric($value) && $value >= 0 ? (int) $value : null;
+}
+
+/**
+ * system.storage: the root filesystem and the one holding FPP's media
+ * folder, which on a player booting from SD with a USB stick for media are
+ * two different disks.
+ *
+ * Source: /api/system/info's Utilization.Disk.{Root,Media}.{Free,Total}
+ * (FPP 10's GetSystemInfoJsonInternal in www/common.php, which measures
+ * Media at the uploads folder under the media directory). Where FPP does not
+ * report a figure, PHP's own disk_free_space / disk_total_space on "/" and on
+ * the media folder stand in — the same calls FPP makes. Left out (null)
+ * when there is no root figure either way.
+ */
+function itb_capture_storage($info)
+{
+	$disk = is_array($info) && isset($info['Utilization']['Disk']) && is_array($info['Utilization']['Disk'])
+		? $info['Utilization']['Disk'] : array();
+	$figure = function ($name, $field) use ($disk) {
+		return isset($disk[$name][$field]) ? itb_bytes($disk[$name][$field]) : null;
+	};
+
+	$rootFree = $figure('Root', 'Free');
+	$rootTotal = $figure('Root', 'Total');
+	if ($rootFree === null || $rootTotal === null) {
+		$rootFree = itb_bytes(@disk_free_space('/'));
+		$rootTotal = itb_bytes(@disk_total_space('/'));
+	}
+	if ($rootFree === null || $rootTotal === null || $rootTotal <= 0)
+		return null;
+
+	$mediaPath = itb_media_dir();
+	$mediaFree = $figure('Media', 'Free');
+	$mediaTotal = $figure('Media', 'Total');
+	if (($mediaFree === null || $mediaTotal === null) && is_dir($mediaPath)) {
+		$mediaFree = itb_bytes(@disk_free_space($mediaPath));
+		$mediaTotal = itb_bytes(@disk_total_space($mediaPath));
+	}
+	if ($mediaFree === null || $mediaTotal === null || $mediaTotal <= 0) {
+		$mediaFree = null;
+		$mediaTotal = null;
+		$mediaPath = null;
+	}
+
+	return array(
+		'rootUsedPct' => round(($rootTotal - min($rootFree, $rootTotal)) * 100 / $rootTotal, 1),
+		'freeBytes' => $rootFree,
+		'totalBytes' => $rootTotal,
+		'mediaFreeBytes' => $mediaFree,
+		'mediaTotalBytes' => $mediaTotal,
+		'mediaPath' => $mediaPath,
+	);
+}
+
+/** A non-empty string from an FPP answer, or null. */
+function itb_text_or_null($value)
+{
+	if (!is_string($value) && !is_numeric($value))
+		return null;
+	$value = trim((string) $value);
+	return $value === '' ? null : $value;
+}
+
+/** A whole number of seconds from an FPP answer (which gives them as strings), or null. */
+function itb_seconds_or_null($value)
+{
+	return is_numeric($value) && $value >= 0 ? (int) $value : null;
+}
+
+/**
+ * nowPlaying: what the player was doing at capturedUtc. The snapshot is
+ * periodic — a send every five minutes at best — so elapsed and remaining
+ * are as of capturedUtc, not as of whenever someone reads them.
+ *
+ * Source: /api/system/status, which is fppd's /fppd/status (FPP 10's
+ * GetCurrentFPPDStatus in src/httpAPI.cpp) plus PHP's additions:
+ *   status_name        idle | playing | paused | testing | stopping gracefully
+ *                      | stopping gracefully after loop | stopping now
+ *                      | unknown, or stopped / updating when fppd is not running
+ *   current_playlist.playlist, current_sequence, current_song
+ *   seconds_played, seconds_remaining   numbers as strings
+ *   repeat_mode        the playlist's repeat flag, "0" when idle
+ *   scheduler.status   playing (started by the schedule) | manual | idle
+ * In remote mode there is no playlist, only the sequence and media being
+ * followed. Anything not there is null; a status FPP did not answer at all
+ * leaves the whole block out.
+ */
+function itb_capture_now_playing($status, $capturedUtc)
+{
+	if (!is_array($status))
+		return null;
+
+	$name = isset($status['status_name']) && is_string($status['status_name']) ? strtolower(trim($status['status_name'])) : '';
+	if ($name === 'idle' || $name === 'playing' || $name === 'paused' || $name === 'testing')
+		$state = $name;
+	elseif (strpos($name, 'stopping') === 0)
+		$state = 'stopping';
+	else
+		// Includes fppd not running ("stopped", "updating"): nothing is
+		// playing, but the player is not idle in any useful sense either.
+		$state = 'unknown';
+
+	$active = $state === 'playing' || $state === 'paused' || $state === 'stopping';
+
+	$playlist = isset($status['current_playlist']['playlist']) ? itb_text_or_null($status['current_playlist']['playlist']) : null;
+	$sequence = isset($status['current_sequence']) ? itb_text_or_null($status['current_sequence']) : null;
+	// fppd names the pause FPP inserts between sequences as if it were one.
+	if (!empty($status['global_pause']['active']) || $sequence === 'Global Pause')
+		$sequence = null;
+	$media = isset($status['current_song']) ? itb_text_or_null($status['current_song']) : null;
+
+	$elapsed = null;
+	$remaining = null;
+	if ($active) {
+		$elapsed = itb_seconds_or_null(isset($status['seconds_played']) ? $status['seconds_played']
+			: (isset($status['seconds_elapsed']) ? $status['seconds_elapsed'] : null));
+		$remaining = itb_seconds_or_null(isset($status['seconds_remaining']) ? $status['seconds_remaining'] : null);
+	}
+
+	$scheduled = null;
+	if ($active && isset($status['scheduler']['status']) && is_string($status['scheduler']['status'])) {
+		if ($status['scheduler']['status'] === 'playing')
+			$scheduled = true;
+		elseif ($status['scheduler']['status'] === 'manual')
+			$scheduled = false;
+	}
+
+	$repeat = null;
+	if ($active && $playlist !== null && isset($status['repeat_mode']) && (is_numeric($status['repeat_mode']) || is_bool($status['repeat_mode'])))
+		$repeat = (int) $status['repeat_mode'] !== 0;
+
+	return array(
+		'status' => $state,
+		'playlist' => $active ? $playlist : null,
+		'sequence' => $active ? $sequence : null,
+		'media' => $active ? $media : null,
+		'elapsedSec' => $elapsed,
+		'remainingSec' => $remaining,
+		'scheduled' => $scheduled,
+		'repeat' => $repeat,
+		'capturedUtc' => $capturedUtc,
+	);
+}
+
+/**
+ * nowPlaying without what moves while a show runs: the clock, and the song.
+ * A playlist starting or stopping is worth a send; the next sequence in it
+ * coming up every three minutes is not.
+ */
+function itb_now_playing_stable($nowPlaying)
+{
+	if (!is_array($nowPlaying))
+		return $nowPlaying;
+	foreach (array('elapsedSec', 'remainingSec', 'capturedUtc', 'sequence', 'media') as $key)
+		unset($nowPlaying[$key]);
+	return $nowPlaying;
+}
+
+/** The player's own time zone: FPP's TimeZone setting, else whatever PHP has. */
+function itb_player_timezone()
+{
+	global $settings;
+	if (isset($settings['TimeZone']) && is_string($settings['TimeZone']) && $settings['TimeZone'] !== '') {
+		try {
+			return new DateTimeZone($settings['TimeZone']);
+		} catch (Exception $e) {
+		}
+	}
+	return new DateTimeZone(date_default_timezone_get());
+}
+
+/** Epoch seconds as player-local ISO-8601 without an offset, e.g. 2026-12-24T17:00:00. */
+function itb_local_iso($epoch, $tz)
+{
+	$when = new DateTime('@' . (int) $epoch);
+	$when->setTimezone($tz);
+	return $when->format('Y-m-d\TH:i:s');
+}
+
+/** A flag FPP gives as true/false, 1/0 or "true"/"false"; null if it is none of those. */
+function itb_flag_or_null($value)
+{
+	if (is_bool($value))
+		return $value;
+	if (is_int($value) || (is_string($value) && ($value === '0' || $value === '1')))
+		return (int) $value !== 0;
+	if (is_string($value) && ($value === 'true' || $value === 'false'))
+		return $value === 'true';
+	return null;
+}
+
+/**
+ * scheduleUpcoming: every playlist FPP's scheduler will start or is running
+ * from now to ITB_UPCOMING_DAYS ahead, soonest first, at most
+ * ITB_MAX_UPCOMING. Commands the schedule fires are left out — they are not
+ * playlists — and so is an occurrence a higher-priority entry overrides,
+ * since it will not play.
+ *
+ * Source: /api/fppd/schedule/range?start=&end=&summary=1&includeDisabled=1
+ * (FPP 10's Scheduler::GetScheduleRange): fppd's own expansion of the
+ * schedule rules — sunrise and sunset times, date ranges, holidays — into
+ * occurrences, each with startTime/endTime epochs, playlist, repeat, enabled
+ * and overridden. summary=1 folds the hundreds of occurrences a repeating
+ * command makes into one a day; a playlist only occurs once a day anyway.
+ * Disabled entries are included with enabled false, so "why did the show
+ * not start" has an answer. When the scheduler as a whole is switched off,
+ * every item is enabled false.
+ *
+ * Fallback, for a build without /range: /api/fppd/schedule (Scheduler::
+ * GetSchedule), which covers only the ScheduleDistance days fppd has
+ * committed to, with items whose args are [playlist, repeat, ...] and whose
+ * id points into entries[].
+ *
+ * Null when neither answered; an empty list when nothing is scheduled.
+ */
+function itb_capture_schedule_upcoming(&$errors)
+{
+	$now = time();
+	$end = $now + ITB_UPCOMING_DAYS * 86400;
+	$tz = itb_player_timezone();
+
+	$ignored = array();
+	$range = itb_local_json('/api/fppd/schedule/range?start=' . $now . '&end=' . $end . '&summary=1&includeDisabled=1', $ignored);
+	$fromRange = is_array($range) && isset($range['schedule']['items']) && is_array($range['schedule']['items']);
+	if ($fromRange) {
+		$schedule = $range['schedule'];
+	} else {
+		$answer = itb_local_json('/api/fppd/schedule', $errors);
+		if (!is_array($answer) || !isset($answer['schedule']['items']) || !is_array($answer['schedule']['items'])) {
+			if ($answer !== null)
+				$errors[] = '/api/fppd/schedule: no items in the answer';
+			return null;
+		}
+		$schedule = $answer['schedule'];
+	}
+
+	return itb_upcoming_items($schedule, $fromRange, $now, $end, $tz, $errors);
+}
+
+/**
+ * The scheduleUpcoming list from one of FPP's schedule answers (the
+ * "schedule" member of /api/fppd/schedule/range or /api/fppd/schedule; see
+ * itb_capture_schedule_upcoming): playlists only, not overridden, ending
+ * after $now and starting by $end, soonest first, capped.
+ */
+function itb_upcoming_items($schedule, $fromRange, $now, $end, $tz, &$errors)
+{
+	if (!is_array($schedule) || !isset($schedule['items']) || !is_array($schedule['items']))
+		return array();
+
+	$schedulerOn = isset($schedule['enabled']) ? itb_flag_or_null($schedule['enabled']) : null;
+	$entries = isset($schedule['entries']) && is_array($schedule['entries']) ? $schedule['entries'] : array();
+
+	$items = array();
+	foreach ($schedule['items'] as $item) {
+		if (!is_array($item) || !empty($item['overridden']))
+			continue;
+		$args = isset($item['args']) && is_array($item['args']) ? array_values($item['args']) : array();
+		$entry = isset($item['id']) && is_numeric($item['id']) && isset($entries[(int) $item['id']]) && is_array($entries[(int) $item['id']])
+			? $entries[(int) $item['id']] : array();
+
+		$playlist = isset($item['playlist']) ? itb_text_or_null($item['playlist']) : null;
+		if ($playlist === null && isset($item['command']) && $item['command'] === 'Start Playlist' && isset($args[0]))
+			$playlist = itb_text_or_null($args[0]);
+		if ($playlist === null)
+			continue;
+
+		$startEpoch = isset($item['startTime']) && is_numeric($item['startTime']) ? (int) $item['startTime'] : null;
+		$endEpoch = isset($item['endTime']) && is_numeric($item['endTime']) ? (int) $item['endTime'] : null;
+		// start and end are required strings, so an item without its times is no use.
+		if ($startEpoch === null || $endEpoch === null || $endEpoch < $now || $startEpoch > $end)
+			continue;
+
+		$repeat = isset($item['repeat']) ? itb_flag_or_null($item['repeat']) : null;
+		if ($repeat === null && isset($args[1]))
+			$repeat = itb_flag_or_null($args[1]);
+		if ($repeat === null && isset($entry['repeat']))
+			$repeat = itb_flag_or_null($entry['repeat']);
+
+		$enabled = isset($item['enabled']) ? itb_flag_or_null($item['enabled']) : null;
+		if ($enabled === null && isset($entry['enabled']))
+			$enabled = itb_flag_or_null($entry['enabled']);
+		if ($enabled === null && !$fromRange)
+			// GetSchedule only ever lists what fppd will run.
+			$enabled = true;
+		if ($schedulerOn === false)
+			$enabled = false;
+
+		$items[] = array(
+			'playlist' => $playlist,
+			'start' => itb_local_iso($startEpoch, $tz),
+			'end' => itb_local_iso($endEpoch, $tz),
+			'startEpoch' => $startEpoch,
+			'endEpoch' => $endEpoch,
+			'repeat' => $repeat,
+			'enabled' => $enabled,
+		);
+	}
+
+	usort($items, function ($a, $b) {
+		if ($a['startEpoch'] !== $b['startEpoch'])
+			return $a['startEpoch'] < $b['startEpoch'] ? -1 : 1;
+		return strcmp($a['playlist'], $b['playlist']);
+	});
+	if (count($items) > ITB_MAX_UPCOMING) {
+		$errors[] = 'scheduleUpcoming: only the first ' . ITB_MAX_UPCOMING . ' upcoming playlists were captured';
+		$items = array_slice($items, 0, ITB_MAX_UPCOMING);
+	}
+	return $items;
+}
+
+/**
+ * system.storage reduced to what is worth a send: how full each disk is, in
+ * tenths. Free space moves by the minute as logs grow; a disk crossing from
+ * 80 % to 90 % full is news.
+ */
+function itb_storage_stable($storage)
+{
+	if (!is_array($storage))
+		return null;
+	$band = function ($free, $total) {
+		return is_numeric($free) && is_numeric($total) && $total > 0 ? (int) floor(($total - $free) * 10 / $total) : null;
+	};
+	return array(
+		'root' => $band($storage['freeBytes'], $storage['totalBytes']),
+		'media' => $band($storage['mediaFreeBytes'], $storage['mediaTotalBytes']),
+	);
+}
+
 /**
  * Everything the toolbox should know about this player, as one document.
  *
@@ -869,7 +1212,13 @@ function itb_controllers_stable($controllers)
  *
  *   schema, capturedUtc, plugin{name,version}, device{id,hostname}
  *   trigger, changed[], fingerprint   why it was sent and what moved — see itb_prepare()
- *   system{info,status}      /api/system/info, /api/system/status
+ *   system{info,status,storage}   /api/system/info, /api/system/status; storage is
+ *                            the root and media disks' free and total bytes — see
+ *                            itb_capture_storage()
+ *   nowPlaying               what was playing at its capturedUtc, from /api/system/status —
+ *                            see itb_capture_now_playing()
+ *   scheduleUpcoming[]       the playlists the scheduler starts in the next nine days,
+ *                            soonest first — see itb_capture_schedule_upcoming()
  *   settings{name:value}     FPP's own $settings, without credentials or FPP's privacy settings
  *   network                  /api/network/interface, without MAC addresses
  *   cape                     /api/cape (null when there is none)
@@ -894,6 +1243,7 @@ function itb_build_snapshot()
 	$errors = array();
 
 	$info = itb_local_json('/api/system/info', $errors);
+	$statusUtc = itb_now();
 	$status = itb_local_json('/api/system/status', $errors);
 	// Real values from FPP's own settings, credentials and privacy settings
 	// skipped by name; see itb_capture_settings.
@@ -966,6 +1316,9 @@ function itb_build_snapshot()
 	}
 
 	$controllers = itb_capture_controllers(isset($configFiles['co-universes.json']) ? $configFiles['co-universes.json'] : null, $errors);
+	$storage = itb_capture_storage($info);
+	$nowPlaying = itb_capture_now_playing($status, $statusUtc);
+	$upcoming = itb_capture_schedule_upcoming($errors);
 
 	$snapshot = array(
 		'schema' => ITB_SCHEMA,
@@ -977,12 +1330,14 @@ function itb_build_snapshot()
 			'hostname' => itb_hostname($info),
 		),
 		'system' => array('info' => $info, 'status' => $status),
+		'nowPlaying' => $nowPlaying,
 		'settings' => $settings,
 		'network' => $network,
 		'cape' => $cape,
 		'ports' => $ports,
 		'outputProcessors' => $processors,
 		'schedule' => $schedule,
+		'scheduleUpcoming' => $upcoming,
 		'playlists' => array('names' => $playlistNames, 'items' => $playlists),
 		'plugins' => $plugins,
 		'files' => $files,
@@ -991,6 +1346,13 @@ function itb_build_snapshot()
 		'controllers' => $controllers,
 		'errors' => $errors,
 	);
+	// Each of these is left out, not sent as null, when FPP could not give it.
+	if ($storage !== null)
+		$snapshot['system']['storage'] = $storage;
+	foreach (array('nowPlaying', 'scheduleUpcoming') as $key) {
+		if ($snapshot[$key] === null)
+			unset($snapshot[$key]);
+	}
 
 	return itb_redact(itb_strip_identifiers($snapshot));
 }
@@ -1040,7 +1402,10 @@ function itb_status_fppd($snapshot)
  * from one minute to the next without anyone touching the player. The
  * warnings and whether fppd is running are the two live facts that are worth
  * a send, so they come back in under their own keys. The controllers block
- * goes in without its timings (itb_controllers_stable).
+ * goes in without its timings (itb_controllers_stable), nowPlaying without
+ * its clock or the current song (itb_now_playing_stable), and the disks as
+ * how full they are in tenths (itb_storage_stable). Every one of them still
+ * goes out whole in the snapshot that is sent.
  */
 function itb_fingerprint($snapshot)
 {
@@ -1049,11 +1414,15 @@ function itb_fingerprint($snapshot)
 		unset($stable[$key]);
 	if (isset($stable['system']) && is_array($stable['system'])) {
 		unset($stable['system']['status']);
+		if (isset($stable['system']['storage']))
+			$stable['system']['storage'] = itb_storage_stable($stable['system']['storage']);
 		if (isset($stable['system']['info']) && is_array($stable['system']['info']))
 			unset($stable['system']['info']['Utilization']);
 	}
 	if (isset($stable['controllers']))
 		$stable['controllers'] = itb_controllers_stable($stable['controllers']);
+	if (isset($stable['nowPlaying']))
+		$stable['nowPlaying'] = itb_now_playing_stable($stable['nowPlaying']);
 	$stable['_warnings'] = itb_status_warnings($snapshot);
 	$stable['_fppd'] = itb_status_fppd($snapshot);
 	return itb_hash($stable);
@@ -1068,12 +1437,14 @@ function itb_fingerprint($snapshot)
 function itb_section_hashes($snapshot)
 {
 	$sections = array();
-	foreach (array('settings', 'network', 'cape', 'outputProcessors', 'schedule', 'playlists', 'plugins') as $key)
+	foreach (array('settings', 'network', 'cape', 'outputProcessors', 'schedule', 'scheduleUpcoming', 'playlists', 'plugins') as $key)
 		$sections[$key] = itb_hash(isset($snapshot[$key]) ? $snapshot[$key] : null);
 	$sections['warnings'] = itb_hash(itb_status_warnings($snapshot));
 	$sections['fppd'] = itb_hash(itb_status_fppd($snapshot));
 	$sections['files'] = itb_hash(isset($snapshot['files']) ? $snapshot['files'] : null);
 	$sections['controllers'] = itb_hash(itb_controllers_stable(isset($snapshot['controllers']) ? $snapshot['controllers'] : null));
+	$sections['nowPlaying'] = itb_hash(itb_now_playing_stable(isset($snapshot['nowPlaying']) ? $snapshot['nowPlaying'] : null));
+	$sections['storage'] = itb_hash(itb_storage_stable(isset($snapshot['system']['storage']) ? $snapshot['system']['storage'] : null));
 	if (isset($snapshot['configFiles']) && is_array($snapshot['configFiles'])) {
 		foreach ($snapshot['configFiles'] as $name => $body)
 			$sections['configFiles.' . $name] = itb_hash($body);
