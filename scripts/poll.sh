@@ -6,7 +6,10 @@
 # Each call to the plugin's poll endpoint holds a long request open at the
 # toolbox for up to twenty seconds, then carries out whatever came back, so
 # a "Request snapshot" button in the toolbox reaches the player within
-# seconds without the toolbox ever connecting inward. How long to wait
+# seconds without the toolbox ever connecting inward. When the Player
+# Failover plugin is installed, each round also passes its status on to the
+# toolbox and holds the request open twelve seconds instead, so the status
+# goes about every fifteen seconds. How long to wait
 # before the next call depends on the answer:
 #
 #   "skipped"       not linked, the switch is off, or the token has lapsed;

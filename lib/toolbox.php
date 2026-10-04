@@ -15,8 +15,11 @@
  *      the account — and remember what went, so the five-minute timer can
  *      tell whether anything changed and stay quiet when nothing did.
  *   4. Answer. Ask the toolbox whether someone has asked this player for
- *      something — a fresh snapshot, a light test, an fppd restart — do it,
- *      and report back.
+ *      something — a fresh snapshot, a light test, an fppd restart, a
+ *      failover switch — do it, and report back.
+ *   5. Relay. When the Player Failover plugin is installed, pass its status
+ *      on to the toolbox every fifteen seconds, so Control Booth can show
+ *      which player has the show.
  *
  * Nothing here reads fppd's internal port or touches FPP's files under the
  * media directory; the only files it writes are its own, in
@@ -31,7 +34,7 @@
 
 if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
-	define('ITB_PLUGIN_VERSION', '1.4.0');
+	define('ITB_PLUGIN_VERSION', '1.5.0');
 	/** The Illumination Toolbox Terms of Service (dated) a person agrees to when linking. */
 	define('ITB_TERMS_VERSION', '2026-10-04');
 	define('ITB_TERMS_URL', 'https://www.illuminationtoolbox.com/terms');
@@ -59,6 +62,10 @@ if (!defined('ITB_PLUGIN')) {
 	define('ITB_MAX_UPCOMING', 50);
 	/** A skip, or a poll that could not reach the toolbox, is logged at most this often per reason. */
 	define('ITB_LOG_QUIET_SECONDS', 3600);
+	/** The Player Failover plugin's API on this player. The ?action= form works on every FPP 10 build; subpaths 404 on 10.0–10.1. */
+	define('ITB_FAILOVER_API', '/api/plugin-apis/failover');
+	/** Player Failover status goes to the toolbox at most this often, unless the role or state changed. */
+	define('ITB_FAILOVER_EVERY_SECONDS', 15);
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────
@@ -1705,11 +1712,16 @@ function itb_sync($auto = false, $trigger = 'manual')
 	if ($status === 200) {
 		$entry = json_decode($out, true);
 		$sentUtc = itb_now();
-		$stateSaved = itb_write_state(array(
+		$newState = array(
 			'fingerprint' => $snapshot['fingerprint'],
 			'sections' => $sections,
 			'sentUtc' => $sentUtc,
-		));
+		);
+		// The poll loop keeps its own failover bookkeeping in the same file.
+		$current = itb_read_state();
+		if (isset($current['failover']) && is_array($current['failover']))
+			$newState['failover'] = $current['failover'];
+		$stateSaved = itb_write_state($newState);
 		itb_record_sync(true, '', null, $trigger);
 		itb_log('sent (' . $trigger . '), ' . strlen($json) . ' bytes' . ($snapshot['changed'] ? ', changed: ' . implode(', ', $snapshot['changed']) : ''));
 		return array(
@@ -1782,8 +1794,17 @@ function itb_poll()
 	itb_maybe_renew_token();
 	$token = itb_token();
 	$auth = array('Content-Type: application/json', 'Authorization: Bearer ' . $token);
+
+	// Player Failover status first, so it never waits behind a request. When
+	// the failover plugin answers, the claim holds for twelve seconds rather
+	// than twenty, which with poll.sh's three-second pause brings the next
+	// round, and the next status, about fifteen seconds on. A request still
+	// arrives the moment it is queued either way.
+	$failover = itb_failover_relay(false);
+	$wait = !empty($failover['present']) ? 12 : 20;
+
 	// An empty string rather than null, so curl sends a proper POST with Content-Length: 0.
-	list($status, $out, $err) = itb_http('POST', itb_commands_url($deviceId, '/claim?wait=20'), '', $auth, 35);
+	list($status, $out, $err) = itb_http('POST', itb_commands_url($deviceId, '/claim?wait=' . $wait), '', $auth, 35);
 
 	if ($status === 401) {
 		$message = 'The toolbox no longer accepts this player\'s token. Pair again.';
@@ -1801,6 +1822,7 @@ function itb_poll()
 	$commands = is_array($claim) && isset($claim['commands']) && is_array($claim['commands']) ? $claim['commands'] : array();
 
 	$ran = 0;
+	$failoverRan = false;
 	foreach ($commands as $cmd) {
 		if (!is_array($cmd) || !isset($cmd['id']) || !is_string($cmd['id']) || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $cmd['id']))
 			continue;
@@ -1812,6 +1834,17 @@ function itb_poll()
 		itb_http('POST', itb_commands_url($deviceId, '/' . rawurlencode($cmd['id']) . '/result'),
 			itb_encode(array('ok' => $result['ok'], 'message' => $result['message'])), $auth, 30);
 		$ran++;
+		if ($type === 'failover')
+			$failoverRan = true;
+	}
+
+	// After a failover switch, the toolbox hears the new status at once
+	// rather than on the next round. The failover plugin acts on its own
+	// next tick, so give it a moment first; whatever it has not finished by
+	// then shows up as a change on the next round.
+	if ($failoverRan) {
+		usleep(1000000);
+		itb_failover_relay(true);
 	}
 
 	return array('ok' => true, 'ran' => $ran);
@@ -1847,6 +1880,9 @@ function itb_run_command($cmd)
 
 		case 'test_lights':
 			return itb_test_lights($args);
+
+		case 'failover':
+			return itb_failover_command($args);
 
 		case 'stop_test':
 			list($status, $out, $err) = itb_local_post('/api/testmode', array('enabled' => 0));
@@ -1931,6 +1967,245 @@ function itb_test_lights($args)
 	return array('ok' => true, 'message' => 'Test running on channels ' . $start . '–' . $end . ' for ' . $seconds . ' s');
 }
 
+// ── Player Failover ─────────────────────────────────────────────────────────
+// The fpp-failover plugin runs a primary and a backup player that hand the
+// show between them. When it is installed and given a role, this plugin
+// passes a trimmed copy of its status to the toolbox, so Control Booth can
+// show which player has the show, and carries out the switches a person asks
+// for there. Both ride on the poll loop: the status goes out at the start of
+// a round, at most every fifteen seconds unless the role or state moved, and
+// a switch is just another request. Nothing happens when the failover plugin
+// is not installed, not answering, or has no role.
+
+/**
+ * The failover plugin's status, as it answers it, or null when it is not
+ * installed, not answering within three seconds, or switched off (role off).
+ */
+function itb_failover_local_status()
+{
+	list($status, $out, $err) = itb_http('GET', ITB_LOCAL_API . ITB_FAILOVER_API . '?action=status', null, array(), 3);
+	if ($status !== 200)
+		return null;
+	$data = json_decode($out, true);
+	if (!is_array($data) || !isset($data['role']) || !is_string($data['role']) || $data['role'] === '' || $data['role'] === 'off')
+		return null;
+	return $data;
+}
+
+/**
+ * Exactly the fields the toolbox takes (the hub contract's PUT
+ * /api/fpp/devices/{id}/failover body), each as the type it should be or
+ * null. Everything else the failover plugin reports — its witness list,
+ * content sync, what it has heard on the network — stays on the player.
+ * None of it is a credential.
+ */
+function itb_failover_trim($s)
+{
+	$text = function ($v) {
+		return is_string($v) || is_int($v) || is_float($v) ? (string) $v : null;
+	};
+	$int = function ($v) {
+		return is_numeric($v) ? (int) $v : null;
+	};
+	$flag = function ($v) {
+		return is_bool($v) ? $v : null;
+	};
+	$get = function ($a, $k) {
+		return is_array($a) && array_key_exists($k, $a) ? $a[$k] : null;
+	};
+	$hot = isset($s['hot']) && is_array($s['hot']) ? $s['hot'] : array();
+	$peer = isset($s['peer']) && is_array($s['peer']) ? $s['peer'] : array();
+	$player = isset($s['player']) && is_array($s['player']) ? $s['player'] : array();
+
+	$events = array();
+	if (isset($s['events']) && is_array($s['events'])) {
+		foreach ($s['events'] as $e) {
+			if (is_string($e))
+				$events[] = $e;
+		}
+		// The plugin keeps the newest last.
+		$events = array_slice($events, -10);
+	}
+
+	return array(
+		'capturedUtc' => itb_now(),
+		'version' => $text($get($s, 'version')),
+		'role' => $text($get($s, 'role')),
+		'state' => $text($get($s, 'state')),
+		'epoch' => $int($get($s, 'epoch')),
+		'manualStandby' => $flag($get($s, 'manualStandby')),
+		'fppMode' => $text($get($s, 'fppMode')),
+		'hot' => array(
+			'capable' => $flag($get($hot, 'capable')),
+			'standby' => $flag($get($hot, 'standby')),
+			'actingPlayer' => $flag($get($hot, 'actingPlayer')),
+			'lastSyncMsAgo' => $int($get($hot, 'lastSyncMsAgo')),
+		),
+		'peer' => array(
+			'address' => $text($get($peer, 'address')),
+			'host' => $text($get($peer, 'host')),
+			'alive' => $flag($get($peer, 'alive')),
+			'lastOkMsAgo' => $int($get($peer, 'lastOkMsAgo')),
+			'state' => $text($get($peer, 'state')),
+			'role' => $text($get($peer, 'role')),
+			'manualStandby' => $flag($get($peer, 'manualStandby')),
+		),
+		'player' => array(
+			'status_name' => $text($get($player, 'status_name')),
+			'playlist' => $text($get($player, 'playlist')),
+			'sequence' => $text($get($player, 'sequence')),
+			'seconds_remaining' => $int($get($player, 'seconds_remaining')),
+		),
+		'events' => $events,
+	);
+}
+
+/** What counts as a change worth sending before fifteen seconds are up: who has the show, and whether the other player is there. */
+function itb_failover_change_key($trimmed)
+{
+	return itb_hash(array(
+		$trimmed['role'], $trimmed['state'], $trimmed['epoch'], $trimmed['manualStandby'],
+		$trimmed['peer']['alive'], $trimmed['peer']['state'], $trimmed['peer']['role'], $trimmed['peer']['manualStandby'],
+	));
+}
+
+/** The failover bookkeeping in state.json, replaced (or removed, with null) without touching the snapshot's. */
+function itb_failover_save_state($entry)
+{
+	$state = itb_read_state();
+	if ($entry === null) {
+		if (!isset($state['failover']))
+			return;
+		unset($state['failover']);
+	} else {
+		$state['failover'] = $entry;
+	}
+	itb_write_state($state);
+}
+
+/**
+ * Sends the failover plugin's status to the toolbox when it is due: fifteen
+ * seconds after the last try, as soon as the role or state changed, or at
+ * once with $force (after a failover request). Only while linked, and — for
+ * the regular sends — only while Send automatically is on; a switch someone
+ * asked for always reports back, the way a snapshot request does.
+ *
+ * Returns null when there is nothing to relay (not linked, switched off, or
+ * no failover plugin with a role), else array(present => true, sent => bool,
+ * ok => bool).
+ */
+function itb_failover_relay($force)
+{
+	$token = itb_token();
+	$deviceId = itb_setting('deviceId');
+	if ($token === '' || $deviceId === '')
+		return null;
+	if (!$force && itb_setting('autoSync', '1') !== '1')
+		return null;
+
+	$local = itb_failover_local_status();
+	if ($local === null) {
+		itb_failover_save_state(null);
+		return null;
+	}
+
+	$trimmed = itb_failover_trim($local);
+	$key = itb_failover_change_key($trimmed);
+	$state = itb_read_state();
+	$last = isset($state['failover']) && is_array($state['failover']) ? $state['failover'] : array();
+	$lastTry = isset($last['triedUnix']) && is_numeric($last['triedUnix']) ? (int) $last['triedUnix'] : 0;
+	$lastKey = isset($last['key']) && is_string($last['key']) ? $last['key'] : '';
+	$due = $force || $lastKey !== $key || time() - $lastTry >= ITB_FAILOVER_EVERY_SECONDS;
+	if (!$due)
+		return array('present' => true, 'sent' => false, 'ok' => true);
+
+	$json = itb_encode($trimmed);
+	if ($json === false)
+		list($status, $out, $err) = array(0, '', 'could not encode the status');
+	else
+		list($status, $out, $err) = itb_http('PUT', itb_api_base() . '/api/fpp/devices/' . rawurlencode($deviceId) . '/failover', $json,
+			array('Content-Type: application/json', 'Authorization: Bearer ' . $token), 10);
+	$ok = $status >= 200 && $status < 300;
+
+	$entry = array('triedUnix' => time(), 'key' => $ok ? $key : $lastKey);
+	foreach (array('sentUtc', 'role', 'state') as $k) {
+		if (isset($last[$k]))
+			$entry[$k] = $last[$k];
+	}
+	if ($ok) {
+		$entry['sentUtc'] = itb_now();
+		$entry['role'] = $trimmed['role'];
+		$entry['state'] = $trimmed['state'];
+		if ($lastKey !== $key)
+			itb_log('Player Failover status sent: ' . $trimmed['role'] . ', ' . $trimmed['state']
+				. ($trimmed['manualStandby'] ? ', held in standby' : ''));
+		else
+			itb_log_quietly('failover-sent', 'sending Player Failover status to the toolbox every ' . ITB_FAILOVER_EVERY_SECONDS . ' s');
+	} else {
+		$message = $status === 401
+			? 'The toolbox no longer accepts this player\'s token. Pair again.'
+			: itb_toolbox_error($status, $out, $err, 'The toolbox refused the failover status');
+		itb_log_quietly('failover-error', 'sending Player Failover status: ' . $message);
+	}
+	itb_failover_save_state($entry);
+	return array('present' => true, 'sent' => true, 'ok' => $ok);
+}
+
+/** What the status page shows about the relay: when the last failover status went, and what it said. Null when none has. */
+function itb_failover_last_sent()
+{
+	$state = itb_read_state();
+	if (!isset($state['failover']['sentUtc']) || !is_string($state['failover']['sentUtc']))
+		return null;
+	return array(
+		'sentUtc' => $state['failover']['sentUtc'],
+		'role' => isset($state['failover']['role']) ? $state['failover']['role'] : null,
+		'state' => isset($state['failover']['state']) ? $state['failover']['state'] : null,
+	);
+}
+
+/**
+ * A failover switch asked for in Control Booth: one POST to the failover
+ * plugin's own API, the same calls its status page buttons make. The plugin
+ * carries the switch out on its next tick; this only says whether it took
+ * the request, in its own words when it did not.
+ */
+function itb_failover_command($args)
+{
+	$action = isset($args['action']) && is_string($args['action']) ? $args['action'] : '';
+	$actions = array(
+		'takeover' => array('takeover', array('graceful' => true, 'manual' => true),
+			'Asked this player to take over the show.'),
+		'takeover_now' => array('takeover', array('graceful' => false, 'manual' => true),
+			'Asked this player to take over the show right away.'),
+		'yield' => array('yield', array('manual' => true),
+			'Asked this player to hand the show over and stand by.'),
+		'failback' => array('failback', new stdClass(),
+			'Asked the primary player to take the show back.'),
+		'resume' => array('resume', new stdClass(),
+			'This player is no longer held in standby.'),
+	);
+	if (!isset($actions[$action]))
+		return array('ok' => false, 'message' => 'failover needs an action: takeover, takeover_now, yield, failback or resume');
+
+	list($call, $body, $done) = $actions[$action];
+	list($status, $out, $err) = itb_http('POST', ITB_LOCAL_API . ITB_FAILOVER_API . '?action=' . $call, itb_encode($body),
+		array('Content-Type: application/json'), 10);
+	$answer = json_decode($out, true);
+	$said = is_array($answer) && isset($answer['message']) && is_string($answer['message']) && $answer['message'] !== ''
+		? $answer['message'] : '';
+
+	if ($status === 200 && !(is_array($answer) && isset($answer['status']) && $answer['status'] === 'error'))
+		return array('ok' => true, 'message' => $done);
+	if ($said !== '')
+		return array('ok' => false, 'message' => 'Player Failover said: ' . $said);
+	if ($status === 0)
+		return array('ok' => false, 'message' => 'Could not reach the Player Failover plugin: ' . ($err ?: 'no answer'));
+	if ($status === 404)
+		return array('ok' => false, 'message' => 'The Player Failover plugin is not installed on this player.');
+	return array('ok' => false, 'message' => 'Player Failover did not take the request (HTTP ' . $status . ').');
+}
+
 // ── Status ──────────────────────────────────────────────────────────────────
 
 /**
@@ -1959,6 +2234,7 @@ function itb_status($checkLink = false)
 		'lastCommandUtc' => itb_setting('lastCommandUtc'),
 		'lastCommandType' => itb_setting('lastCommandType'),
 		'lastCommandResult' => itb_setting('lastCommandResult'),
+		'failover' => itb_failover_last_sent(),
 	);
 
 	if ($checkLink && $status['linked']) {

@@ -22,6 +22,8 @@
 		<li>Installed plugins, network interfaces, and cape information.</li>
 		<li>The controllers this player sends to, and whether each answered a ping when the snapshot was taken.</li>
 		<li>The other FPP systems and controllers this player has discovered on your network: name, address, type, firmware and mode.</li>
+		<li>When the Player Failover plugin is installed: its status — this player's role and state, the other player's
+			name, address and whether it answers, what is playing, and the last ten failover events.</li>
 	</ul>
 	<p>
 		Before it leaves the player, every value whose name looks like a credential — password, secret, token,
@@ -43,6 +45,11 @@
 		ninety seconds after fppd starts; whenever you press <strong>Send now</strong>; and whenever the toolbox asks
 		for a fresh snapshot. Untick <em>Send automatically</em> on the status page to send only by hand and on request.
 	</p>
+	<p>
+		When the Player Failover plugin is installed and given a role, the player also sends its failover status every
+		fifteen seconds while it is listening for requests, and straight away when the role or state changes, so Control
+		Booth can show which player has the show. Untick <em>Send automatically</em> or the requests box to stop it.
+	</p>
 
 	<h3 class="fs-5">Requests from the toolbox</h3>
 	<p>
@@ -51,7 +58,9 @@
 		refused while a playlist is playing, so it never takes over a show in front of an audience, unless the
 		request says to go ahead anyway. A restart request
 		does not stop a running show by itself: it raises FPP's own "FPPD Restart Required" banner, and fppd restarts when you press
-		<strong>Restart FPPD</strong> there, or when the player next boots. The toolbox never connects to the
+		<strong>Restart FPPD</strong> there, or when the player next boots. With the Player Failover plugin installed,
+		Control Booth can also ask this player to take over the show, hand it over, fail back to the primary, or stop
+		holding in standby; the failover plugin does the switch, as if you had pressed its own buttons. The toolbox never connects to the
 		player. Untick <em>Let the toolbox ask this player…</em> on the status page to stop listening.
 	</p>
 

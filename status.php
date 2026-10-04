@@ -56,11 +56,12 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 			<h2 class="card-title fs-5">Requests from the toolbox</h2>
 			<dl class="row mb-3">
 				<dt class="col-sm-4 col-md-3">Remote requests</dt><dd class="col-sm-8 col-md-9" id="itb-remote-state">—</dd>
+				<dt class="col-sm-4 col-md-3 d-none" id="itb-failover-term">Player failover</dt><dd class="col-sm-8 col-md-9 d-none" id="itb-failover">—</dd>
 				<dt class="col-sm-4 col-md-3">Last request</dt><dd class="col-sm-8 col-md-9 mb-0" id="itb-last-request">—</dd>
 			</dl>
 			<div class="form-check form-switch mb-2">
 				<input class="form-check-input" type="checkbox" role="switch" id="itb-allow-remote">
-				<label class="form-check-label" for="itb-allow-remote">Let the toolbox ask this player for a fresh snapshot, a light test, or to flag fppd for a restart</label>
+				<label class="form-check-label" for="itb-allow-remote">Let the toolbox ask this player for a fresh snapshot, a light test, to flag fppd for a restart, or to switch the show between failover players</label>
 			</div>
 			<p id="itb-remote-msg" class="text-danger text-break small mb-2" role="alert"></p>
 			<p class="small text-body-secondary mb-0">
@@ -68,6 +69,8 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 				A request that is not picked up within ten minutes lapses. A restart request does not stop a running show by itself:
 				it raises FPP's own "FPPD Restart Required" banner, and fppd restarts when you press
 				<strong>Restart FPPD</strong> there, or when the player next boots.
+				When the Player Failover plugin is installed, this player also sends its failover status every fifteen seconds,
+				so Control Booth can show which player has the show and let you switch it.
 			</p>
 		</div>
 	</section>
@@ -178,6 +181,13 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 			var remote = el('itb-remote-state');
 			if (s.allowRemote) { tone(remote, 'text-success'); remote.textContent = 'listening'; }
 			else { tone(remote, 'text-body-secondary'); remote.textContent = 'off'; }
+			// Shown once a Player Failover status has gone to the toolbox.
+			var fo = el('itb-failover');
+			var foShown = !!(s.failover && s.failover.sentUtc);
+			el('itb-failover-term').classList.toggle('d-none', !foShown);
+			fo.classList.toggle('d-none', !foShown);
+			if (foShown)
+				fo.textContent = (s.failover.role || '?') + ', ' + (s.failover.state || '?') + ' · sent ' + when(s.failover.sentUtc);
 			var req = el('itb-last-request');
 			if (s.lastCommandType) {
 				var failed = /^failed:/.test(s.lastCommandResult || '');
