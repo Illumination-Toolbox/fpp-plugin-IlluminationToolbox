@@ -46,8 +46,8 @@
 
 	<h3 class="fs-5">Requests from the toolbox</h3>
 	<p>
-		The player asks the toolbox whether anyone has a request for it — a fresh snapshot, a short RGB chase on a
-		channel range so you can see which prop lights, or an fppd restart — and carries it out. A light test is
+		The player asks the toolbox whether anyone has a request for it — a fresh snapshot, a short RGB chase or solid
+		colour on a channel range so you can see which prop lights, or an fppd restart — and carries it out. A light test is
 		refused while a playlist is playing, so it never takes over a show in front of an audience, unless the
 		request says to go ahead anyway. A restart request
 		does not stop a running show by itself: it raises FPP's own "FPPD Restart Required" banner, and fppd restarts when you press
