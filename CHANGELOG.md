@@ -12,6 +12,12 @@ shows git history as release notes (`releaseNotesStyle: gitHistory`). Reconstruc
 - New request `failover` (`takeover`, `takeover_now`, `yield`, `failback`, `resume`), passed to the
   failover plugin's own API; its refusal message is reported back.
 
+## 1.4.1 — 2026-10-04
+
+- `test_lights` runs the `red`, `green`, `blue` and `white` patterns the toolbox accepts, as FPP's
+  RGBFill test mode; before, everything but `rgb_chase` was declined.
+- `pluginInfo.json` and `LICENSE` name Arrowood Enterprises LLC, the operator the Terms name.
+
 ## 1.4.0 — 2026-10-04
 
 - Linking needs the Terms of Service / Privacy Policy box ticked; the agreed version goes to the toolbox.

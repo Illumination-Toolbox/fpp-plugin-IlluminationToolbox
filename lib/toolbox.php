@@ -1911,13 +1911,11 @@ function itb_request_restart()
 }
 
 /**
- * Runs FPP's own test mode — the same RGB chase the Testing page offers —
- * over a channel range, and arranges for it to stop by itself. The stop is
- * a detached shell so this request can be answered straight away and the
- * lights still go out if the poll loop is restarted meanwhile.
- *
- * Only the chase is implemented; FPP's fill and single-colour test modes
- * take different JSON and are declined rather than guessed at.
+ * Runs FPP's own test mode over a channel range — the RGB chase, or a solid
+ * red, green, blue or white fill, as the Testing page offers — and arranges
+ * for it to stop by itself. The stop is a detached shell so this request can
+ * be answered straight away and the lights still go out if the poll loop is
+ * restarted meanwhile.
  */
 function itb_test_lights($args)
 {
@@ -1928,8 +1926,15 @@ function itb_test_lights($args)
 
 	if ($start < 1 || $count < 1)
 		return array('ok' => false, 'message' => 'test_lights needs a startChannel and channelCount of 1 or more');
-	if ($pattern !== 'rgb_chase')
-		return array('ok' => false, 'message' => 'pattern "' . $pattern . '" is not supported by this plugin version; use rgb_chase');
+	// FPP's RGBFill takes the colour as three 0-255 channel values.
+	$fills = array(
+		'red' => array(255, 0, 0),
+		'green' => array(0, 255, 0),
+		'blue' => array(0, 0, 255),
+		'white' => array(255, 255, 255),
+	);
+	if ($pattern !== 'rgb_chase' && !isset($fills[$pattern]))
+		return array('ok' => false, 'message' => 'pattern "' . $pattern . '" is not supported; use rgb_chase, red, green, blue or white');
 
 	// Test mode takes over the lights. Never during a show someone may be
 	// watching, unless the person asked for exactly that (force).
@@ -1949,22 +1954,29 @@ function itb_test_lights($args)
 	$seconds = max(5, min(600, $seconds));
 	$end = $start + $count - 1;
 
-	list($status, $out, $err) = itb_local_post('/api/testmode', array(
+	$test = array(
 		'enabled' => 1,
 		'cycleMS' => 1000,
 		'channelSet' => $start . '-' . $end,
 		'channelSetType' => 'channelRange',
-		'mode' => 'RGBChase',
-		'subMode' => 'RGBChase-RGB',
-		'colorPattern' => 'FF000000FF000000FF',
-	));
+	);
+	if ($pattern === 'rgb_chase') {
+		$test['mode'] = 'RGBChase';
+		$test['subMode'] = 'RGBChase-RGB';
+		$test['colorPattern'] = 'FF000000FF000000FF';
+	} else {
+		$test['mode'] = 'RGBFill';
+		list($test['color1'], $test['color2'], $test['color3']) = $fills[$pattern];
+	}
+	list($status, $out, $err) = itb_local_post('/api/testmode', $test);
 	if ($status !== 200)
 		return array('ok' => false, 'message' => 'Could not start the test: ' . ($status ? 'HTTP ' . $status : ($err ?: 'no answer')));
 
 	$stop = 'sleep ' . $seconds . '; curl -s -m 10 -X POST -H \'Content-Type: application/json\' -d \'{"enabled":0}\' ' . ITB_LOCAL_API . '/api/testmode';
 	exec('nohup bash -c ' . escapeshellarg($stop) . ' >/dev/null 2>&1 &');
 
-	return array('ok' => true, 'message' => 'Test running on channels ' . $start . '–' . $end . ' for ' . $seconds . ' s');
+	$what = $pattern === 'rgb_chase' ? 'RGB chase' : ucfirst($pattern) . ' fill';
+	return array('ok' => true, 'message' => $what . ' running on channels ' . $start . '–' . $end . ' for ' . $seconds . ' s');
 }
 
 // ── Player Failover ─────────────────────────────────────────────────────────
