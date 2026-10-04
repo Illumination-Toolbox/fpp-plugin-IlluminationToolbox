@@ -31,7 +31,15 @@
 
 if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
-	define('ITB_PLUGIN_VERSION', '1.3.0');
+	define('ITB_PLUGIN_VERSION', '1.4.0');
+	/** The Illumination Toolbox Terms of Service (dated) a person agrees to when linking. */
+	define('ITB_TERMS_VERSION', '2026-10-04');
+	define('ITB_TERMS_URL', 'https://www.illuminationtoolbox.com/terms');
+	define('ITB_PRIVACY_URL', 'https://www.illuminationtoolbox.com/privacy');
+	/** A token older than this is swapped for a fresh one, so a linked player never reaches the end of its year. */
+	define('ITB_RENEW_AFTER_SECONDS', 30 * 86400);
+	/** After a renewal that did not work, wait this long before trying again. */
+	define('ITB_RENEW_RETRY_SECONDS', 6 * 3600);
 	define('ITB_SCHEMA', 'illumination-toolbox.fpp-snapshot/1');
 	define('ITB_DEFAULT_API', 'https://api.illuminationtoolbox.com');
 	define('ITB_LOCAL_API', 'http://127.0.0.1');
@@ -176,6 +184,53 @@ function itb_token()
 function itb_set_token($token)
 {
 	return itb_write_private('token', (string) $token);
+}
+
+/** When the token was issued (its JWT iat), or 0 when that can't be read. Not verified: it's our own token. */
+function itb_token_issued_at($token)
+{
+	$parts = explode('.', (string) $token);
+	if (count($parts) !== 3)
+		return 0;
+	$payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/') . str_repeat('=', (4 - strlen($parts[1]) % 4) % 4)), true);
+	return is_array($payload) && isset($payload['iat']) && is_numeric($payload['iat']) ? (int) $payload['iat'] : 0;
+}
+
+/**
+ * Swaps the device token for a fresh one once it is a month old, so a linked
+ * player keeps working past the token's year without anyone pairing it
+ * again. Called before every poll and send; does nothing most of the time. A
+ * token the toolbox no longer accepts (removed, signed out) can't be renewed,
+ * which is the point: renewal never undoes a revocation.
+ */
+function itb_maybe_renew_token()
+{
+	$token = itb_token();
+	$deviceId = itb_setting('deviceId');
+	if ($token === '' || $deviceId === '')
+		return;
+	$issued = itb_token_issued_at($token);
+	if ($issued > 0 && time() - $issued < ITB_RENEW_AFTER_SECONDS)
+		return;
+	$lastTry = (int) itb_setting('renewAttemptUnix', '0');
+	if ($lastTry > 0 && time() - $lastTry < ITB_RENEW_RETRY_SECONDS)
+		return;
+	itb_set('renewAttemptUnix', (string) time());
+
+	list($status, $out, $err) = itb_http('POST', itb_api_base() . '/api/fpp/devices/' . rawurlencode($deviceId) . '/token', '',
+		array('Content-Type: application/json', 'Authorization: Bearer ' . $token), 20);
+	$data = $status === 200 ? json_decode($out, true) : null;
+	if (!is_array($data) || empty($data['token']) || !is_string($data['token'])) {
+		itb_log_quietly('renew', 'renewing the device token: ' . itb_toolbox_error($status, $out, $err, 'the toolbox did not renew it'));
+		return;
+	}
+	if (!itb_set_token($data['token'])) {
+		itb_log('renewing the device token: could not write ' . itb_data_dir() . '/token');
+		return;
+	}
+	itb_set('tokenExpiresUtc', isset($data['expiresUtc']) && is_string($data['expiresUtc']) ? $data['expiresUtc'] : '');
+	itb_set('renewAttemptUnix', '');
+	itb_log('device token renewed' . (isset($data['expiresUtc']) ? '; good until ' . $data['expiresUtc'] : ''));
 }
 
 function itb_forget_token()
@@ -1524,8 +1579,11 @@ function itb_toolbox_error($status, $out, $err, $fallback)
  * someone running their own toolbox edited it there by hand); nothing a
  * request carries can change where the token goes.
  */
-function itb_pair($code)
+function itb_pair($code, $agreedToTerms = false)
 {
+	if ($agreedToTerms !== true)
+		return array('ok' => false, 'error' => 'Tick the box to agree to the Terms of Service and Privacy Policy first.');
+
 	$api = itb_api_base();
 	if (!preg_match('#^https?://[^\s/]+#', $api))
 		return array('ok' => false, 'error' => 'The toolbox address must start with https://.');
@@ -1541,7 +1599,7 @@ function itb_pair($code)
 	$deviceId = itb_token() !== '' && itb_setting('deviceId') !== '' ? itb_setting('deviceId') : itb_device_id($info);
 	$hostname = itb_hostname($info);
 
-	$body = itb_encode(array('code' => $code, 'deviceId' => $deviceId, 'hostname' => $hostname));
+	$body = itb_encode(array('code' => $code, 'deviceId' => $deviceId, 'hostname' => $hostname, 'termsVersion' => ITB_TERMS_VERSION));
 	list($status, $out, $err) = itb_http('POST', $api . '/api/fpp/pair/claim', $body,
 		array('Content-Type: application/json'), 30);
 
@@ -1567,6 +1625,9 @@ function itb_pair($code)
 	itb_set('deviceId', $deviceId);
 	itb_set('username', $data['username']);
 	itb_set('tokenExpiresUtc', isset($data['expiresUtc']) ? $data['expiresUtc'] : '');
+	itb_set('termsAccepted', ITB_TERMS_VERSION);
+	itb_set('termsAcceptedUtc', itb_now());
+	itb_set('renewAttemptUnix', '');
 	foreach (array('lastSyncUtc', 'lastSyncResult', 'lastSyncError', 'lastTrigger', 'lastCommandUtc', 'lastCommandType', 'lastCommandResult') as $key)
 		itb_set($key, '');
 	itb_clear_state();
@@ -1603,6 +1664,7 @@ function itb_unlink()
  */
 function itb_sync($auto = false, $trigger = 'manual')
 {
+	itb_maybe_renew_token();
 	if ($auto && itb_setting('autoSync', '1') !== '1') {
 		itb_log_quietly('sync-off', 'not sending (' . $trigger . '): Send automatically is off');
 		return array('ok' => false, 'skipped' => true, 'error' => 'Auto-sync is off.');
@@ -1717,6 +1779,8 @@ function itb_poll()
 	if (itb_setting('allowRemote', '1') !== '1')
 		return array('ok' => false, 'skipped' => true, 'error' => 'Remote requests are off.');
 
+	itb_maybe_renew_token();
+	$token = itb_token();
 	$auth = array('Content-Type: application/json', 'Authorization: Bearer ' . $token);
 	// An empty string rather than null, so curl sends a proper POST with Content-Length: 0.
 	list($status, $out, $err) = itb_http('POST', itb_commands_url($deviceId, '/claim?wait=20'), '', $auth, 35);
@@ -1830,6 +1894,22 @@ function itb_test_lights($args)
 		return array('ok' => false, 'message' => 'test_lights needs a startChannel and channelCount of 1 or more');
 	if ($pattern !== 'rgb_chase')
 		return array('ok' => false, 'message' => 'pattern "' . $pattern . '" is not supported by this plugin version; use rgb_chase');
+
+	// Test mode takes over the lights. Never during a show someone may be
+	// watching, unless the person asked for exactly that (force).
+	$force = isset($args['force']) && $args['force'] === true;
+	if (!$force) {
+		$errors = array();
+		$fppd = itb_local_json('/api/fppd/status', $errors);
+		$state = is_array($fppd) && isset($fppd['status_name']) && is_string($fppd['status_name']) ? strtolower($fppd['status_name']) : null;
+		if ($state === null)
+			return array('ok' => false, 'message' => 'Not testing: could not tell whether a show is playing. Ask again with force if the show is definitely off.');
+		if ($state !== 'idle') {
+			$what = isset($fppd['current_playlist']['playlist']) && is_string($fppd['current_playlist']['playlist']) && $fppd['current_playlist']['playlist'] !== ''
+				? '"' . $fppd['current_playlist']['playlist'] . '"' : 'a show';
+			return array('ok' => false, 'message' => 'Not testing: the player is ' . $state . ' ' . $what . ', and a test would take over the lights in front of anyone watching. Stop the show first, or ask again with force.');
+		}
+	}
 	$seconds = max(5, min(600, $seconds));
 	$end = $start + $count - 1;
 

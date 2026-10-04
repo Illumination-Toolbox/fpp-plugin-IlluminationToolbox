@@ -67,13 +67,14 @@ function fpppluginIlluminationToolboxStatus()
 	return json($status);
 }
 
-// POST {code} — pairs, then sends the first snapshot straight away.
+// POST {code, agreeTerms: true} — pairs, then sends the first snapshot straight away.
 function fpppluginIlluminationToolboxPair()
 {
 	if (($refused = fpppluginIlluminationToolboxRefuseNonJson()) !== null)
 		return $refused;
 	$body = fpppluginIlluminationToolboxBody();
-	$result = itb_pair(isset($body['code']) && is_string($body['code']) ? $body['code'] : '');
+	$result = itb_pair(isset($body['code']) && is_string($body['code']) ? $body['code'] : '',
+		isset($body['agreeTerms']) && $body['agreeTerms'] === true);
 	if ($result['ok'])
 		$result['sync'] = itb_sync(false, 'pair');
 	return json($result);

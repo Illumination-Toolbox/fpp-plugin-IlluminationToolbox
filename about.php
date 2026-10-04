@@ -47,7 +47,9 @@
 	<h3 class="fs-5">Requests from the toolbox</h3>
 	<p>
 		The player asks the toolbox whether anyone has a request for it — a fresh snapshot, a short RGB chase on a
-		channel range so you can see which prop lights, or an fppd restart — and carries it out. A restart request
+		channel range so you can see which prop lights, or an fppd restart — and carries it out. A light test is
+		refused while a playlist is playing, so it never takes over a show in front of an audience, unless the
+		request says to go ahead anyway. A restart request
 		does not stop a running show by itself: it raises FPP's own "FPPD Restart Required" banner, and fppd restarts when you press
 		<strong>Restart FPPD</strong> there, or when the player next boots. The toolbox never connects to the
 		player. Untick <em>Let the toolbox ask this player…</em> on the status page to stop listening.
@@ -57,13 +59,21 @@
 	<ol>
 		<li>In any toolbox tool, open <strong>Settings</strong> and choose <strong>FPP players</strong>.</li>
 		<li>Press <strong>Link a player</strong>. It shows an eight-character code, good for ten minutes.</li>
-		<li>On this player, open <strong>Status / Control → Illumination Toolbox</strong>, type the code, and press <strong>Link this player</strong>.</li>
+		<li>On this player, open <strong>Status / Control → Illumination Toolbox</strong>, type the code, tick the box
+			to agree to the <a href="<?php echo ITB_TERMS_URL; ?>" target="_blank" rel="noopener">Terms of Service</a>
+			and <a href="<?php echo ITB_PRIVACY_URL; ?>" target="_blank" rel="noopener">Privacy Policy</a>, and press
+			<strong>Link this player</strong>.</li>
 	</ol>
 	<p>
 		The player keeps a token that uploads this player's snapshot and collects the requests you queue for it,
-		nothing else. It is stored in the plugin's own data folder, readable only by FPP, and lasts a year; pair
-		again when it lapses, or any time you want a fresh one. <strong>Unlink</strong> and uninstalling the plugin
-		delete it.
+		nothing else. It is stored in the plugin's own data folder, readable only by FPP, and the player swaps it
+		for a fresh one every month, so a linked player stays linked. Removing the player in the toolbox, or
+		signing out all devices there, ends it for good; pair again after that. <strong>Unlink</strong> and
+		uninstalling the plugin delete it.
+	</p>
+	<p>
+		FPP has no login by default, so anyone on your network who can open this page can unlink the player or
+		link it to another account. To prevent that, turn on <strong>UI password</strong> on the <strong>UI</strong> tab of FPP's <strong>Settings</strong> page.
 	</p>
 	<p>
 		What the plugin does is written to <code>plugin-<?php echo htmlspecialchars(ITB_PLUGIN); ?>.log</code> in FPP's

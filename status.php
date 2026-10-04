@@ -133,6 +133,13 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 				'<input type="text" id="itb-code" class="form-control font-monospace text-uppercase w-auto" size="11" placeholder="XXXX-XXXX" autocomplete="off" spellcheck="false" maxlength="9">' +
 				'<button type="button" class="btn btn-primary" id="itb-pair">Link this player</button>' +
 				'</div>' +
+				'<div class="form-check mt-2">' +
+				'<input class="form-check-input" type="checkbox" id="itb-terms">' +
+				'<label class="form-check-label small" for="itb-terms">I agree to the Illumination Toolbox ' +
+				'<a href="<?php echo ITB_TERMS_URL; ?>" target="_blank" rel="noopener">Terms of Service</a> and ' +
+				'<a href="<?php echo ITB_PRIVACY_URL; ?>" target="_blank" rel="noopener">Privacy Policy</a>. ' +
+				'They limit liability and send disputes to individual arbitration.</label>' +
+				'</div>' +
 				'<p id="itb-pair-msg" class="text-danger text-break small mt-2 mb-0" role="alert"></p>';
 			el('itb-pair').addEventListener('click', pair);
 			el('itb-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') pair(); });
@@ -193,8 +200,10 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 		var code = el('itb-code').value;
 		var btn = el('itb-pair');
 		var msg = el('itb-pair-msg');
-		btn.disabled = true; msg.textContent = '';
-		call('POST', '/pair', { code: code }).then(function (r) {
+		msg.textContent = '';
+		if (!el('itb-terms').checked) { msg.textContent = 'Tick the box to agree to the Terms of Service and Privacy Policy first.'; return; }
+		btn.disabled = true;
+		call('POST', '/pair', { code: code, agreeTerms: true }).then(function (r) {
 			if (!r.ok) { msg.textContent = r.error || 'Pairing failed.'; btn.disabled = false; return; }
 			return load(true);
 		}).catch(function () { msg.textContent = 'Pairing failed.'; btn.disabled = false; });
