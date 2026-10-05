@@ -34,7 +34,7 @@
 
 if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
-	define('ITB_PLUGIN_VERSION', '1.5.0');
+	define('ITB_PLUGIN_VERSION', '1.6.0');
 	/** The Illumination Toolbox Terms of Service (dated) a person agrees to when linking. */
 	define('ITB_TERMS_VERSION', '2026-10-04');
 	define('ITB_TERMS_URL', 'https://www.illuminationtoolbox.com/terms');
@@ -1788,7 +1788,7 @@ function itb_poll()
 	$deviceId = itb_setting('deviceId');
 	if ($token === '' || $deviceId === '')
 		return array('ok' => false, 'skipped' => true, 'error' => 'This player is not linked to a toolbox account yet.');
-	if (itb_setting('allowRemote', '1') !== '1')
+	if (itb_setting('allowRemote', '0') !== '1')
 		return array('ok' => false, 'skipped' => true, 'error' => 'Remote requests are off.');
 
 	itb_maybe_renew_token();
@@ -2242,7 +2242,7 @@ function itb_status($checkLink = false)
 		'lastSyncError' => itb_setting('lastSyncError'),
 		'lastTrigger' => itb_setting('lastTrigger'),
 		'autoSync' => itb_setting('autoSync', '1') === '1',
-		'allowRemote' => itb_setting('allowRemote', '1') === '1',
+		'allowRemote' => itb_setting('allowRemote', '0') === '1',
 		'lastCommandUtc' => itb_setting('lastCommandUtc'),
 		'lastCommandType' => itb_setting('lastCommandType'),
 		'lastCommandResult' => itb_setting('lastCommandResult'),

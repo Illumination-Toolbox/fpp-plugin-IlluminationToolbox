@@ -65,7 +65,9 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 			</div>
 			<p id="itb-remote-msg" class="text-danger text-break small mb-2" role="alert"></p>
 			<p class="small text-body-secondary mb-0">
-				The player asks the toolbox whether anything is waiting; the toolbox never connects to the player.
+				Off until you tick it. While it is on, anyone signed in to your toolbox account can do these things from anywhere
+				on the internet. No port is opened: the player keeps asking the toolbox whether anything is waiting, and the
+				toolbox never connects to the player. A light test is refused during a show unless the request says to go ahead anyway.
 				A request that is not picked up within ten minutes lapses. A restart request does not stop a running show by itself:
 				it raises FPP's own "FPPD Restart Required" banner, and fppd restarts when you press
 				<strong>Restart FPPD</strong> there, or when the player next boots.

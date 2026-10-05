@@ -3,6 +3,17 @@
 The version is `ITB_PLUGIN_VERSION` in `lib/toolbox.php`. FPP's Plugin Manager installs from `main` and
 shows git history as release notes (`releaseNotesStyle: gitHistory`). Reconstructed from git history.
 
+## 1.6.0 — 2026-10-05
+
+- Remote requests (and the Player Failover relay, which rides on them) are off until *Let the toolbox ask
+  this player…* is ticked. Players that never touched the box stop listening after the upgrade; ones
+  that ticked or unticked it keep their choice.
+- `pluginInfo.json` declares `remoteAccess: internet-authenticated` instead of `none`: no port is
+  opened, but the toolbox account can send the player requests from the internet. The description,
+  summary and `other` say so, and that only the five request types are accepted. FPP shows the changed
+  privacy block for approval on upgrade.
+- Status page, about page and README say requests are off by default and what turning them on allows.
+
 ## 1.5.0 — 2026-10-04
 
 - Relays Player Failover status: when the failover plugin is installed with a role, each poll round reads

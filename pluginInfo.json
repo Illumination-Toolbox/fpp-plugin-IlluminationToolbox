@@ -2,7 +2,7 @@
 	"repoName": "fpp-plugin-IlluminationToolbox",
 	"name": "Illumination Toolbox",
 	"author": "James Arrowood (Arrowood Enterprises LLC)",
-	"description": "Links this player to your Illumination Toolbox account and sends its configuration to api.illuminationtoolbox.com: settings (with credentials and FPP's privacy settings removed), channel outputs, schedule, playlists, sequence and music file names, the installed plugin list, hostname and IP addresses, FPP version and hardware model, free disk space, what it is playing at the moment and the playlists scheduled for the next nine days, current warnings, the controllers it sends to and whether they answer, and the systems it has discovered on your network - so the xLights AI and the other toolbox tools can see it when you ask for help. With the Player Failover plugin installed, it also sends that plugin's status so Control Booth can show which player has the show. It also carries out remote requests you make in the toolbox: a fresh snapshot, a light test, flagging fppd for a restart, or switching the show between failover players. MAC addresses and serial numbers are removed on the player before anything leaves it.",
+	"description": "Links this player to your Illumination Toolbox account and sends its configuration to api.illuminationtoolbox.com: settings (with credentials and FPP's privacy settings removed), channel outputs, schedule, playlists, sequence and music file names, the installed plugin list, hostname and IP addresses, FPP version and hardware model, free disk space, what it is playing at the moment and the playlists scheduled for the next nine days, current warnings, the controllers it sends to and whether they answer, and the systems it has discovered on your network - so the xLights AI and the other toolbox tools can see it when you ask for help. With the Player Failover plugin installed, it also sends that plugin's status so Control Booth can show which player has the show. If you turn on remote requests after linking, anyone signed in to your toolbox account can control this player from anywhere on the internet, without a port being opened: the player keeps a connection open to the toolbox and carries out a fresh snapshot, a light test, flagging fppd for a restart, or switching the show between failover players. MAC addresses and serial numbers are removed on the player before anything leaves it.",
 	"homeURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox",
 	"srcURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox.git",
 	"bugURL": "https://github.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/issues",
@@ -10,7 +10,7 @@
 	"allowUpdates": 1,
 	"releaseNotesStyle": "gitHistory",
 	"privacy": {
-		"summary": "Sends this player's configuration, with passwords removed, to your Illumination Toolbox account, and carries out the requests you make there.",
+		"summary": "Sends this player's configuration, with passwords removed, to your Illumination Toolbox account and, once you turn remote requests on, lets that account control the player over the internet.",
 		"sends": [
 			{
 				"to": "api.illuminationtoolbox.com",
@@ -51,13 +51,13 @@
 			{
 				"to": "api.illuminationtoolbox.com",
 				"what": "requests for work and the results of the ones it ran",
-				"why": "so you can ask the player for a snapshot, a light test, a restart or a failover switch from the toolbox",
+				"why": "so you can ask for a snapshot, light test, restart or failover switch from the toolbox",
 				"alwaysOn": false
 			}
 		],
 		"collects": [],
 		"sensors": [],
-		"remoteAccess": "none",
+		"remoteAccess": "internet-authenticated",
 		"systemChanges": [
 			{
 				"kind": "service",
@@ -65,7 +65,7 @@
 			}
 		],
 		"closedCode": false,
-		"other": "Nothing is sent until you link the player with a code from your toolbox account. Once linked, the account's owner can ask this player through the toolbox for a fresh snapshot, a light test on a channel range, an fppd restart, or, with the Player Failover plugin installed, a failover switch; a restart request only sets FPP's own restart-required flag, and fppd restarts when you press Restart FPPD or the player next boots. Untick the remote requests box on the plugin's page to turn requests off. Anything whose name looks like a password, key or token is replaced on the player before sending. Linking stores a device token in the plugin's data folder, which Unlink and uninstall delete. The toolbox keeps the current snapshot plus up to ten earlier ones per player, deleted when you remove the player or delete your account. Privacy policy: https://www.illuminationtoolbox.com/privacy"
+		"other": "Nothing is sent until you link the player with a code from your toolbox account. Remote requests are off until you tick the remote requests box on the plugin's page. While it is ticked, the player holds a connection open to api.illuminationtoolbox.com, so no port is opened and nothing on the internet connects to the player, but anyone signed in to the linked toolbox account can, from anywhere, have this player send a fresh snapshot, run a light test on a channel range (even during a show, if they ask with force), stop a test, flag fppd for a restart, or, with the Player Failover plugin installed, take over or hand back the show. Those five requests are all it accepts: no shell commands, files or other FPP pages. A restart request only sets FPP's own restart-required flag, and fppd restarts when you press Restart FPPD or the player next boots. Untick the box to turn requests off again. Anything whose name looks like a password, key or token is replaced on the player before sending. Linking stores a device token in the plugin's data folder, which Unlink and uninstall delete. The toolbox keeps the current snapshot plus up to ten earlier ones per player, deleted when you remove the player or delete your account. Privacy policy: https://www.illuminationtoolbox.com/privacy"
 	},
 	"versions": [
 		{

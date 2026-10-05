@@ -60,8 +60,14 @@
 		does not stop a running show by itself: it raises FPP's own "FPPD Restart Required" banner, and fppd restarts when you press
 		<strong>Restart FPPD</strong> there, or when the player next boots. With the Player Failover plugin installed,
 		Control Booth can also ask this player to take over the show, hand it over, fail back to the primary, or stop
-		holding in standby; the failover plugin does the switch, as if you had pressed its own buttons. The toolbox never connects to the
-		player. Untick <em>Let the toolbox ask this player…</em> on the status page to stop listening.
+		holding in standby; the failover plugin does the switch, as if you had pressed its own buttons.
+	</p>
+	<p>
+		Requests are <strong>off</strong> until you tick <em>Let the toolbox ask this player…</em> on the status page.
+		While it is ticked, anyone signed in to your toolbox account can do these things from anywhere on the internet.
+		No port is opened and the toolbox never connects to the player: the player keeps asking it, so the requests reach
+		the player through your router all the same. Those five requests are all it accepts; no shell commands, files or
+		other FPP pages. Untick the box to stop listening.
 	</p>
 
 	<h3 class="fs-5">Pairing</h3>
