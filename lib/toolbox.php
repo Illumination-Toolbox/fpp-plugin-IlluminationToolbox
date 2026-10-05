@@ -1980,11 +1980,11 @@ function itb_test_lights($args)
 }
 
 // ── Player Failover ─────────────────────────────────────────────────────────
-// The fpp-failover plugin runs a primary and a backup player that hand the
-// show between them. When it is installed and given a role, this plugin
-// passes a trimmed copy of its status to the toolbox, so Control Booth can
-// show which player has the show, and carries out the switches a person asks
-// for there. Both ride on the poll loop: the status goes out at the start of
+// The Player Failover plugin (fpp-plugin-IlluminationToolbox-Failover) runs
+// a primary and a backup player that hand the show between them. When it
+// is installed and given a role, this plugin passes a trimmed copy of its
+// status to the toolbox, so Control Booth can show which player has the
+// show, and carries out the switches a person asks for there. Both ride on the poll loop: the status goes out at the start of
 // a round, at most every fifteen seconds unless the role or state moved, and
 // a switch is just another request. Nothing happens when the failover plugin
 // is not installed, not answering, or has no role.
