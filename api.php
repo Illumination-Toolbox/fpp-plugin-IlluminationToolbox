@@ -28,7 +28,7 @@ function getEndpointsfpppluginIlluminationToolbox()
 		array('method' => 'POST', 'endpoint' => 'sync', 'callback' => 'fpppluginIlluminationToolboxSync'),
 		array('method' => 'POST', 'endpoint' => 'poll', 'callback' => 'fpppluginIlluminationToolboxPoll'),
 		array('method' => 'POST', 'endpoint' => 'unlink', 'callback' => 'fpppluginIlluminationToolboxUnlink'),
-		array('method' => 'POST', 'endpoint' => 'settings', 'callback' => 'fpppluginIlluminationToolboxSettings'),
+		array('method' => 'POST', 'endpoint' => 'switches', 'callback' => 'fpppluginIlluminationToolboxSwitches'),
 		array('method' => 'GET', 'endpoint' => 'preview', 'callback' => 'fpppluginIlluminationToolboxPreview'),
 	);
 }
@@ -115,7 +115,10 @@ function fpppluginIlluminationToolboxUnlink()
 
 // POST {autoSync?: bool, allowRemote?: bool}. The toolbox address is not
 // one of them: it is fixed, and only a hand edit of the settings file moves it.
-function fpppluginIlluminationToolboxSettings()
+// Not called "settings": FPP's own POST /plugin/:RepoName/settings/:SettingName
+// answers that path first, with an empty name, and stores the body as a
+// nameless setting, so the switches never reached this function.
+function fpppluginIlluminationToolboxSwitches()
 {
 	if (($refused = fpppluginIlluminationToolboxRefuseNonJson()) !== null)
 		return $refused;

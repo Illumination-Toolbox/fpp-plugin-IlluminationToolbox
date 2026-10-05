@@ -245,7 +245,7 @@ $itbApi = '/api/plugin/' . ITB_PLUGIN;
 			var body = {};
 			body[key] = wanted;
 			el(lineId).textContent = '';
-			call('POST', '/settings', body).then(function (s) {
+			call('POST', '/switches', body).then(function (s) {
 				if (!s || !s.ok) throw new Error(s && s.error ? s.error : 'not saved');
 				state = Object.assign({}, state, s); render();
 			}).catch(function (e) {

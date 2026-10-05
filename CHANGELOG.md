@@ -6,13 +6,17 @@ shows git history as release notes (`releaseNotesStyle: gitHistory`). Reconstruc
 ## 1.6.0 — 2026-10-05
 
 - Remote requests (and the Player Failover relay, which rides on them) are off until *Let the toolbox ask
-  this player…* is ticked. Players that never touched the box stop listening after the upgrade; ones
-  that ticked or unticked it keep their choice.
+  this player…* is ticked. Because the box never saved before (see the fix below), every player
+  upgrading to 1.6.0 stops listening until someone ticks it.
 - `pluginInfo.json` declares `remoteAccess: internet-authenticated` instead of `none`: no port is
   opened, but the toolbox account can send the player requests from the internet. The description,
   summary and `other` say so, and that only the five request types are accepted. FPP shows the changed
   privacy block for approval on upgrade.
 - Status page, about page and README say requests are off by default and what turning them on allows.
+- Fix: the status page's two switches (*Send automatically* and *Let the toolbox ask this player…*)
+  never saved. Their endpoint was `POST …/settings`, which FPP's own
+  `/plugin/:RepoName/settings/:SettingName` route answers first, storing the body as a nameless
+  setting. The endpoint is now `POST …/switches`.
 
 ## 1.5.0 — 2026-10-04
 
