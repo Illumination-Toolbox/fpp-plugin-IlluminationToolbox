@@ -27,6 +27,13 @@ shows git history as release notes (`releaseNotesStyle: gitHistory`). Reconstruc
 - New request `failover` (`takeover`, `takeover_now`, `yield`, `failback`, `resume`), passed to the
   failover plugin's own API; its refusal message is reported back.
 
+## 1.4.2 — 2026-10-05
+
+- Installs cleanly on FPP's Docker image. It has `systemctl` but systemd is not PID 1, so
+  `daemon-reload` failed and the install script exited 1. The installer now treats a player as
+  having systemd only when `/run/systemd/system` exists, and a `daemon-reload` failure after the
+  units are written is logged rather than fatal.
+
 ## 1.4.1 — 2026-10-04
 
 - `test_lights` runs the `red`, `green`, `blue` and `white` patterns the toolbox accepts, as FPP's

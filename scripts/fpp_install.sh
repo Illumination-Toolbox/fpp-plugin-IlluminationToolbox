@@ -17,8 +17,10 @@
 #
 # Both run as the fpp user when there is one: all they do is call the
 # plugin's API on localhost, which needs no privileges. On a player without
-# systemd (FPP on macOS, say) there is nothing to install; the plugin's page
-# and Send now still work, and the timer and requests from the toolbox do not.
+# systemd running (FPP on macOS, or FPP's Docker image, where systemctl and
+# /etc/systemd/system exist but systemd is not PID 1) there is nothing to
+# install; the plugin's page and Send now still work, and the timer and
+# requests from the toolbox do not.
 
 set -e
 
@@ -44,7 +46,11 @@ log() {
 
 chmod +x "${PLUGIN_DIR}"/scripts/*.sh
 
-if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /etc/systemd/system ]; then
+# /run/systemd/system exists only while systemd is running as init; it is the
+# test sd_booted() uses. systemctl being installed is not enough: in a
+# container it is, and every call fails with "System has not been booted
+# with systemd as init system".
+if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ] || [ ! -d /etc/systemd/system ]; then
 	log "install: no systemd on this player, so the five-minute check and the request listener were not set up"
 	exit 0
 fi
@@ -96,7 +102,9 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
+# The units are written; from here on a failure is logged, never fatal, so
+# FPP does not report the install as failed over a unit that will not start.
+systemctl daemon-reload >/dev/null 2>&1 || log "install: systemctl daemon-reload failed; the timer and request listener may not run until the next reboot"
 # enable --now starts a unit that was not running; restart makes a unit that
 # was already running pick up the rewritten file, which is the upgrade case.
 systemctl enable --now "${UNIT}.timer" >/dev/null 2>&1 || true
