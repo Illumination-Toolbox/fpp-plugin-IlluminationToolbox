@@ -32,8 +32,8 @@
 			},
 			{
 				"to": "api.illuminationtoolbox.com",
-				"what": "free disk space, what is playing at the moment, and the playlists the schedule starts in the next nine days",
-				"why": "so the xLights AI can tell you whether a show is running, whether tonight's show will start, and whether the player is out of space",
+				"what": "free disk space, what is playing now, and the playlists scheduled for the next nine days",
+				"why": "so the xLights AI can tell whether a show is running, will start tonight, or is out of space",
 				"alwaysOn": false
 			},
 			{

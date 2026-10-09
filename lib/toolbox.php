@@ -34,7 +34,7 @@
 
 if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
-	define('ITB_PLUGIN_VERSION', '1.6.1');
+	define('ITB_PLUGIN_VERSION', '1.6.2');
 	/** The Illumination Toolbox Terms of Service (dated) a person agrees to when linking. */
 	define('ITB_TERMS_VERSION', '2026-10-04');
 	define('ITB_TERMS_URL', 'https://www.illuminationtoolbox.com/terms');
@@ -427,12 +427,35 @@ function itb_redact($value)
 /**
  * FPP's privacy settings: the operator's answers to FPP about their own data
  * (guidelines §14.9). Not the plugin's business, so itb_capture_settings()
- * skips them by name and never reads their values.
+ * skips them by name and never reads their values. Which settings those are
+ * comes from FPP itself, its settings.json "privacy" and
+ * "initialSetup-privacy" groups, and from their names: anything about
+ * privacy, consent, jurisdiction, crash reports, stats publishing or vendor
+ * data. That covers the ones outside those groups (the stats URL, the consent
+ * record) and any FPP adds later.
  */
-function itb_privacy_setting_keys()
+function itb_is_privacy_setting($key, $groups)
 {
-	return array('statsPublish', 'statsPublishUrl', 'ShareCrashData', 'FetchVendorLogos',
-		'SendVendorSerial', 'SendVendorLogos', 'privacyConsent', 'LegalJurisdiction');
+	return isset($groups[$key])
+		|| preg_match('/privacy|consent|jurisdiction|crash|^stats|vendor/i', $key) === 1;
+}
+
+/** The settings FPP's own settings.json lists under its privacy groups, as a set. */
+function itb_privacy_setting_groups()
+{
+	$dir = isset($GLOBALS['settings']['fppDir']) && is_string($GLOBALS['settings']['fppDir']) ? $GLOBALS['settings']['fppDir'] : '/opt/fpp';
+	$json = @file_get_contents($dir . '/www/settings.json');
+	$data = $json === false ? null : json_decode($json, true);
+	$set = array();
+	foreach (array('privacy', 'initialSetup-privacy') as $group) {
+		$names = isset($data['settingGroups'][$group]['settings']) && is_array($data['settingGroups'][$group]['settings'])
+			? $data['settingGroups'][$group]['settings'] : array();
+		foreach ($names as $name) {
+			if (is_string($name))
+				$set[$name] = true;
+		}
+	}
+	return $set;
 }
 
 /**
@@ -467,7 +490,7 @@ function itb_personal_setting_keys()
  *
  * Reading that array whole would read FPP's credentials along with
  * everything else, so it is filtered by NAME before any value is looked at:
- * a credential, anything whose name looks like one, FPP's eight privacy
+ * a credential, anything whose name looks like one, FPP's privacy
  * settings and its email-alert addresses are skipped without their values
  * ever being read. What
  * is left is plain switches, numbers and short strings; anything else
@@ -481,10 +504,12 @@ function itb_capture_settings(&$errors)
 		return null;
 	}
 
-	$skip = array_merge(itb_core_credential_setting_keys(), itb_privacy_setting_keys(), itb_personal_setting_keys());
+	$skip = array_merge(itb_core_credential_setting_keys(), itb_personal_setting_keys());
+	$privacy = itb_privacy_setting_groups();
 	$out = array();
 	foreach (array_keys($all) as $key) {
-		if (!is_string($key) || $key === '' || in_array($key, $skip, true) || itb_is_secret_key($key))
+		if (!is_string($key) || $key === '' || in_array($key, $skip, true) || itb_is_secret_key($key)
+			|| itb_is_privacy_setting($key, $privacy))
 			continue;
 		$value = $all[$key];
 		if (is_bool($value) || is_int($value) || is_float($value))

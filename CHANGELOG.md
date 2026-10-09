@@ -3,6 +3,15 @@
 The version is `ITB_PLUGIN_VERSION` in `lib/toolbox.php`. FPP's Plugin Manager installs from `main` and
 shows git history as release notes (`releaseNotesStyle: gitHistory`). Reconstructed from git history.
 
+## 1.6.2 — 2026-10-09
+
+- FPP's privacy settings are recognised by what FPP itself says rather than a list of their names: the
+  settings in its `privacy` and `initialSetup-privacy` groups, and anything named for privacy, consent,
+  jurisdiction, crash reports, stats publishing or vendor data. All eight are still skipped without their
+  values being read, and so is any FPP adds later (the stats file path, `statsFile`, is now skipped too).
+  The fpp-data plugin check no longer reports a privacy-setting read.
+- Two privacy lines in `pluginInfo.json` shortened to fit the install dialog's 100-character limit.
+
 ## 1.6.1 — 2026-10-09
 
 - The install script, which FPP runs as root, no longer writes to or changes the owner of its log
