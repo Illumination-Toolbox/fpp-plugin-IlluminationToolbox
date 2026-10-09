@@ -3,6 +3,12 @@
 The version is `ITB_PLUGIN_VERSION` in `lib/toolbox.php`. FPP's Plugin Manager installs from `main` and
 shows git history as release notes (`releaseNotesStyle: gitHistory`). Reconstructed from git history.
 
+## 1.6.1 — 2026-10-09
+
+- The install script, which FPP runs as root, no longer writes to or changes the owner of its log
+  file when that file is a symlink. The logs folder belongs to `fpp`, so a symlink planted there could
+  otherwise have had root append to any file and hand it to `fpp`.
+
 ## 1.6.0 — 2026-10-05
 
 - Remote requests (and the Player Failover relay, which rides on them) are off until *Let the toolbox ask

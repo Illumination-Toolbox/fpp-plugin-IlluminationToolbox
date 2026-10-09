@@ -34,7 +34,7 @@
 
 if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
-	define('ITB_PLUGIN_VERSION', '1.6.0');
+	define('ITB_PLUGIN_VERSION', '1.6.1');
 	/** The Illumination Toolbox Terms of Service (dated) a person agrees to when linking. */
 	define('ITB_TERMS_VERSION', '2026-10-04');
 	define('ITB_TERMS_URL', 'https://www.illuminationtoolbox.com/terms');

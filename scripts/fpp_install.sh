@@ -35,12 +35,15 @@ UNIT="fpp-illumination-toolbox-sync"
 POLL="fpp-illumination-toolbox-poll"
 
 # The log is the plugin's, written mostly by the web server as fpp; a line
-# from this root script must not leave it owned by root.
+# from this root script must not leave it owned by root. The logs folder
+# belongs to fpp, so a symlink there could point anywhere: root never writes
+# through one or hands its target to fpp.
 log() {
 	echo "$1"
+	[ -L "${PLUGIN_LOG}" ] && return 0
 	echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $1" >> "${PLUGIN_LOG}" 2>/dev/null || true
 	if id -u fpp >/dev/null 2>&1; then
-		chown fpp:fpp "${PLUGIN_LOG}" 2>/dev/null || true
+		chown -h fpp:fpp "${PLUGIN_LOG}" 2>/dev/null || true
 	fi
 }
 
