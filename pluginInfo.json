@@ -9,6 +9,7 @@
 	"iconURL": "https://raw.githubusercontent.com/Illumination-Toolbox/fpp-plugin-IlluminationToolbox/main/icon.png",
 	"allowUpdates": 1,
 	"releaseNotesStyle": "gitHistory",
+	"submissionToken": "fpp-286",
 	"privacy": {
 		"summary": "Sends this player's configuration, with passwords removed, to your Illumination Toolbox account and, once you turn remote requests on, lets that account control the player over the internet.",
 		"sends": [
