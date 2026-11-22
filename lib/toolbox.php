@@ -34,7 +34,7 @@
 
 if (!defined('ITB_PLUGIN')) {
 	define('ITB_PLUGIN', 'fpp-plugin-IlluminationToolbox');
-	define('ITB_PLUGIN_VERSION', '1.6.2');
+	define('ITB_PLUGIN_VERSION', '1.6.3');
 	/** The Illumination Toolbox Terms of Service (dated) a person agrees to when linking. */
 	define('ITB_TERMS_VERSION', '2026-10-04');
 	define('ITB_TERMS_URL', 'https://www.illuminationtoolbox.com/terms');
@@ -325,11 +325,35 @@ function itb_log_quietly($reason, $message)
 // ── HTTP ────────────────────────────────────────────────────────────────────
 
 /**
+ * Whether a request may go to this URL: https:// anywhere, or http:// only
+ * to the loopback address (127.0.0.0/8, ::1, localhost). Anything else —
+ * http:// to another host, or another scheme — is refused, so a hand-edited
+ * apiBaseUrl can never make the player send its pairing code or token in
+ * cleartext.
+ */
+function itb_url_allowed($url)
+{
+	if (!is_string($url) || !preg_match('#^(https?)://(\[[0-9A-Fa-f:.]+\]|[^\s/?\#@:\[\]]+)(:[0-9]{1,5})?(?:[/?\#]|$)#i', $url, $m))
+		return false;
+	if (strtolower($m[1]) === 'https')
+		return true;
+	$host = strtolower(trim($m[2], '[]'));
+	return $host === 'localhost' || $host === '::1' || preg_match('/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/', $host) === 1;
+}
+
+/**
  * One request. Returns array(status, body, curlError). Status 0 means the
  * request never got an answer, and curlError says why.
  */
 function itb_http($method, $url, $body = null, $headers = array(), $timeout = 15)
 {
+	// Nothing leaves the player in cleartext: the pairing code, the device
+	// token and the snapshot only go over https. Plain http is allowed only
+	// to this player itself (its own API, or a toolbox run on it for testing).
+	if (!itb_url_allowed($url))
+		return array(0, '', 'refused to send to ' . preg_replace('#^([a-z][a-z0-9+.-]*://[^/?\#]*).*$#i', '$1', (string) $url)
+			. ': only https:// addresses, or http:// on this player itself, are used');
+
 	$ch = curl_init($url);
 	curl_setopt_array($ch, array(
 		CURLOPT_RETURNTRANSFER => true,
@@ -337,6 +361,7 @@ function itb_http($method, $url, $body = null, $headers = array(), $timeout = 15
 		CURLOPT_CONNECTTIMEOUT => 5,
 		CURLOPT_TIMEOUT => $timeout,
 		CURLOPT_FOLLOWLOCATION => false,
+		CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
 		CURLOPT_HTTPHEADER => array_merge(array('Accept: application/json', 'User-Agent: ' . ITB_PLUGIN . '/' . ITB_PLUGIN_VERSION), $headers),
 	));
 	if ($body !== null)
@@ -409,8 +434,42 @@ function itb_is_secret_key($key)
 		|| preg_match('/(?i:pass|key|auth|pat)(?![a-z])/', $key) === 1;
 }
 
+/**
+ * The second pass, by VALUE rather than key: a credential can sit under a
+ * neutral key (a proxy URL in a plugin's config, a curl line in a command
+ * preset) or inside a text file that travels whole (proxies, a non-JSON
+ * config file). Every string in the snapshot is scrubbed of:
+ *   - the user:password in a URL (http://user:pass@host -> http://[redacted]@host)
+ *   - Authorization headers (Bearer / Basic / Token / Digest) and long Bearer tokens
+ *   - password=, token=, key=… pairs (and password: …) in query strings,
+ *     command lines and config text, and "password": "…" inside JSON-as-text
+ *   - PEM private-key blocks and anything shaped like a JWT
+ *   - email addresses
+ * MACs are already removed by itb_strip_identifiers().
+ */
+function itb_redact_string($value)
+{
+	if (!is_string($value) || $value === '')
+		return $value;
+	$rules = array(
+		'#\b([a-z][a-z0-9+.-]*://)[^\s/?\#@"\']+@#i' => '$1[redacted]@',
+		'/(Authorization\s*[:=]\s*["\']?(?:Bearer|Basic|Token|Digest)\s+)[^\s"\']+/i' => '$1[redacted]',
+		'/\b(Bearer\s+)[A-Za-z0-9._~+\/=-]{16,}/' => '$1[redacted]',
+		'/-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/s' => '[redacted]',
+		'/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/' => '[redacted]',
+		'/((?:password|passwd|passphrase|passcode|pwd|psk|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)\s*[=:]\s*)("[^"]*"|\'[^\']*\'|[^\s&;,"\'<>]+)/i' => '$1[redacted]',
+		'/((?<![A-Za-z])(?:key|pass|auth|pat)\s*=\s*)("[^"]*"|\'[^\']*\'|[^\s&;,"\'<>]+)/i' => '$1[redacted]',
+		'/(["\']?(?:password|passwd|passphrase|pwd|psk|secret|token|api[_-]?key|private[_-]?key)["\']?\s*:\s*)"[^"]*"/i' => '$1"[redacted]"',
+		'/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/' => '[redacted]',
+	);
+	$out = preg_replace(array_keys($rules), array_values($rules), $value);
+	return is_string($out) ? $out : '[redacted]';
+}
+
 function itb_redact($value)
 {
+	if (is_string($value))
+		return itb_redact_string($value);
 	if (!is_array($value))
 		return $value;
 
@@ -1617,8 +1676,8 @@ function itb_pair($code, $agreedToTerms = false)
 		return array('ok' => false, 'error' => 'Tick the box to agree to the Terms of Service and Privacy Policy first.');
 
 	$api = itb_api_base();
-	if (!preg_match('#^https?://[^\s/]+#', $api))
-		return array('ok' => false, 'error' => 'The toolbox address must start with https://.');
+	if (!itb_url_allowed($api))
+		return array('ok' => false, 'error' => 'The toolbox address (apiBaseUrl) must start with https:// (plain http:// is only allowed to this player itself, for testing).');
 
 	$code = trim((string) $code);
 	if ($code === '')

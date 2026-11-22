@@ -13,8 +13,10 @@ Needs FPP 10 or later.
   passwords, mail and MQTT logins, tether PSK, remote token), anything named
   like a password, key or token, FPP's privacy settings and its email-alert
   addresses. Any value shaped like an email address is left out too.
-- Channel outputs and inputs, output processors, pixel overlay models, GPIO
-  and command presets.
+- Whole config files: channel outputs and inputs (`co-*.json`, `ci-*.json`,
+  `channeloutputs.json`), output processors, pixel overlay models, GPIO,
+  command presets, `schedule.json`, `proxies`, virtual display and channel
+  memory maps.
 - The schedule, playlist names and up to 30 playlists, and the playlists the
   schedule will start in the next nine days.
 - What is playing at the moment: idle, playing, paused or testing, and which
@@ -22,7 +24,8 @@ Needs FPP 10 or later.
 - Free and total disk space.
 - Sequence and music file names; for sequences, size, date, channel count and
   length.
-- The installed plugin list, network interfaces and cape information.
+- The installed plugin list, network interface status, cape information and
+  fppd's port status.
 - Hostname, IP addresses, FPP version, platform and hardware model, uptime,
   sensors and the warnings the player is showing.
 - The controllers the player sends to and whether they answer a ping, and the
@@ -31,8 +34,11 @@ Needs FPP 10 or later.
   plugin installed, a short status of its own (see below).
 
 Before anything leaves the player, any value whose name looks like a
-credential is replaced with `[redacted]`, and MAC addresses, serial numbers
-and hardware uuids are removed. Other plugins' settings files, network
+credential is replaced with `[redacted]`, and so is any credential-shaped
+value under any name: the login in a URL (`http://user:pass@host`), a
+Bearer/Basic token, `password=`/`key=`/`token=` pairs, private keys and
+email addresses. MAC addresses, serial numbers and hardware uuids are
+removed. Other plugins' settings files, network
 interface files and backups are not read at all. **Status / Control →
 Illumination Toolbox → See exactly what is sent** shows the snapshot as it
 would go.
@@ -115,6 +121,13 @@ FPP and kept out of FPP's backups and crash reports. It can only upload this
 player's snapshot and collect requests for it; it cannot read the account or
 another player. It renews itself while the player stays linked. **Unlink**
 deletes it, and uninstalling the plugin deletes its data folder and settings.
+A **Reinstall** from Plugin Manager (FPP 10.4+) keeps them, so the player
+stays linked.
+
+The player only talks to the toolbox over `https://`. An `apiBaseUrl` edited
+by hand to a plain `http://` address is refused (unless it points at the
+player itself, for local testing), so the pairing code and token never go
+out in cleartext.
 
 What the plugin does is logged to `plugin-fpp-plugin-IlluminationToolbox.log`
 in FPP's log viewer: each send, each request and how it went, pairing and

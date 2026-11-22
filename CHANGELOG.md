@@ -3,6 +3,22 @@
 The version is `ITB_PLUGIN_VERSION` in `lib/toolbox.php`. FPP's Plugin Manager installs from `main` and
 shows git history as release notes (`releaseNotesStyle: gitHistory`). Reconstructed from git history.
 
+## 1.6.3 — 2026-11-22
+
+- A Reinstall from Plugin Manager (FPP 10.4+, `FPP_PLUGIN_REINSTALL=1`) no longer deletes the device token,
+  settings or state, so the player stays linked. A real uninstall still deletes them.
+- The player refuses to send anything over plain `http://` except to itself. A hand-edited `apiBaseUrl`
+  pointing at `http://` elsewhere is rejected at pairing with a matching message, and every later request
+  (sync, renew, poll, failover relay) is refused too, so the pairing code and token never travel in
+  cleartext. curl is limited to http/https.
+- Redaction gains a pass by value, not just by key: the login in a URL (`http://user:pass@host`),
+  Bearer/Basic/Token values, `password=`/`token=`/`key=`-style pairs, JSON-as-text password fields, PEM
+  private keys, JWTs and email addresses are replaced with `[redacted]` wherever they appear in the
+  snapshot, including whole text config files such as `proxies`.
+- `pluginInfo.json`: `description` cut to two sentences; new `sends` rows name the full config files
+  and schedule, and network/cape/port status, uptime and sensors; failover row lower-cased like the rest.
+  FPP shows the changed privacy block for approval on upgrade.
+
 ## 1.6.2 — 2026-10-09
 
 - FPP's privacy settings are recognised by what FPP itself says rather than a list of their names: the

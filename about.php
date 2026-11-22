@@ -16,10 +16,10 @@
 		<li>System info and status: hostname, IP addresses, FPP version, platform and hardware model, mode, uptime, sensors, and the current warnings.</li>
 		<li>Settings, from <code>/api/settings</code>, without FPP's privacy settings.</li>
 		<li>Channel outputs and inputs: every <code>co-*.json</code> and <code>ci-*.json</code> config file — E1.31 / ArtNet / DDP universes, pixel strings, other outputs.</li>
-		<li>Output processors, pixel overlay models, GPIO and command presets.</li>
+		<li>Whole config files: output processors, pixel overlay models, GPIO, command presets, <code>channeloutputs.json</code>, <code>schedule.json</code> and <code>proxies</code>.</li>
 		<li>The schedule, playlist names, and the contents of up to 30 playlists.</li>
 		<li>Sequence and music file names, and for sequences their size, date, channel count and length.</li>
-		<li>Installed plugins, network interfaces, and cape information.</li>
+		<li>Installed plugins, network interface status, cape information and fppd's port status.</li>
 		<li>The controllers this player sends to, and whether each answered a ping when the snapshot was taken.</li>
 		<li>The other FPP systems and controllers this player has discovered on your network: name, address, type, firmware and mode.</li>
 		<li>When the Player Failover plugin is installed: its status — this player's role and state, the other player's
@@ -27,7 +27,9 @@
 	</ul>
 	<p>
 		Before it leaves the player, every value whose name looks like a credential — password, secret, token,
-		key, PSK — is replaced with <code>[redacted]</code>, FPP's own privacy settings are taken out, and so are
+		key, PSK — is replaced with <code>[redacted]</code>, and so is any value shaped like a credential under any
+		name: a login inside a URL, a Bearer token, <code>password=</code> or <code>key=</code> pairs, a private key or an
+		email address. FPP's own privacy settings are taken out, and so are
 		MAC addresses, serial numbers and hardware uuids. Other plugins' settings files, network interface files
 		and backups are not sent at all. Open <a href="/api/plugin/<?php echo htmlspecialchars(ITB_PLUGIN); ?>/preview" target="_blank" rel="noopener">the preview</a>
 		to read exactly what a send contains.
@@ -84,7 +86,8 @@
 		nothing else. It is stored in the plugin's own data folder, readable only by FPP, and the player swaps it
 		for a fresh one every month, so a linked player stays linked. Removing the player in the toolbox, or
 		signing out all devices there, ends it for good; pair again after that. <strong>Unlink</strong> and
-		uninstalling the plugin delete it.
+		uninstalling the plugin delete it; a Reinstall from Plugin Manager keeps it. The token only ever goes to the
+		toolbox over <code>https://</code>.
 	</p>
 	<p>
 		FPP has no login by default, so anyone on your network who can open this page can unlink the player or
